@@ -62,7 +62,8 @@ button{cursor:pointer}
 .stage iframe{border:0;display:block;background:#000}
 .stage .wide{width:min(100cqw,100cqh*16/9);height:min(100cqh,100cqw*9/16)}
 .stage .tall{height:100cqh;width:min(100cqw,100cqh*9/16 + 0px);min-width:min(100cqw,340px)}
-.stage .tweet{height:100cqh;width:min(100cqw,560px);background:#000}
+.tweetwrap{position:relative;overflow:hidden}
+.tweetwrap iframe{position:absolute;left:0;top:0;width:550px;transform-origin:0 0;background:transparent!important;color-scheme:normal}
 .igcrop{position:relative;overflow:hidden;background:#000}
 .igcrop iframe{position:absolute;width:400px;height:820px;transform-origin:0 0}
 .empty{text-align:center;max-width:44ch;padding:24px;color:var(--muted)}
@@ -417,6 +418,12 @@ function renderPlayer(){
       const wrap = document.createElement('div');
       wrap.className = 'igcrop';
       wrap.appendChild(f); stage.appendChild(wrap); layoutIG();
+    } else if (current.platform === 'twitter') {
+      f.className = ''; TW.h = 620;
+      f.style.height = TW.h + 'px';
+      const wrap = document.createElement('div');
+      wrap.className = 'tweetwrap';
+      wrap.appendChild(f); stage.appendChild(wrap); layoutTweet();
     } else stage.appendChild(f);
   }
   renderNow();
@@ -444,7 +451,30 @@ function layoutIG(){
   f.style.left = -((IG.w - IG.vid)/2 + IG.over)*s + 'px';
   f.style.top = -(IG.head + IG.over)*s + 'px';
 }
-try { new ResizeObserver(layoutIG).observe($('#stage')); } catch { window.addEventListener('resize', layoutIG); }
+/* X's embed is a 550px-wide card. It reports its real height by postMessage; size the frame to that
+   and scale the whole card to fill the stage. */
+const TW = {w:550, h:620};
+function layoutTweet(){
+  const wrap = document.querySelector('#stage .tweetwrap'); if (!wrap) return;
+  const st = $('#stage'), pad = 16;
+  const s = Math.min((st.clientHeight - pad) / TW.h, (st.clientWidth - pad) / TW.w);
+  const f = wrap.firstChild;
+  f.style.height = TW.h + 'px';
+  f.style.transform = `scale(${s})`;
+  wrap.style.width = TW.w*s + 'px'; wrap.style.height = TW.h*s + 'px';
+}
+window.addEventListener('message', e => {
+  if (e.origin !== 'https://platform.twitter.com') return;
+  const f = document.querySelector('#stage .tweetwrap iframe');
+  if (!f || e.source !== f.contentWindow) return;
+  let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data; } catch { return; }
+  const m = d && d['twttr.embed'];
+  if (!m || m.method !== 'twttr.private.resize' || !m.params || !m.params[0]) return;
+  const h = Math.ceil(+m.params[0].height);
+  if (h > 100 && Math.abs(h - TW.h) > 1) { TW.h = h; layoutTweet(); }
+});
+const relayout = () => { layoutIG(); layoutTweet(); };
+try { new ResizeObserver(relayout).observe($('#stage')); } catch { window.addEventListener('resize', relayout); }
 
 let ytFrame = null;
 function hookYouTube(f){
