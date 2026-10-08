@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chat Clip Queue</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: broadcast control desk — wide stage on the left, rundown (queue) on the right; stacks on narrow screens. Single dark look by choice (used beside OBS). */
+:root{
+  --bg:#111318; --panel:#181b22; --raised:#20242d; --line:#2b303b;
+  --fg:#ebe7df; --muted:#8e93a2; --accent:#f2b544; --accent-ink:#1a1405;
+  --live:#e5484d; --ok:#4cc38a;
+  --yt:#ff5a52; --twitch:#a970ff; --tiktok:#3ee8e2; --ig:#ef4f8b; --x:#d9dce0; --str:#3b9cff;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 var(--body);padding-inline:16px}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.app{display:flex;flex-direction:column;gap:14px;min-height:100%;padding-block:14px;max-width:1600px;margin:0 auto}
+
+/* top bar */
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px}
+.brand{font:700 22px/1 var(--display);letter-spacing:-.01em;margin:0;white-space:nowrap}
+.brand small{display:block;font:500 11px/1.4 var(--mono);color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-top:4px}
+.connect{display:flex;gap:8px;flex:1 1 300px;max-width:440px}
+.field{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 11px;min-width:0;width:100%}
+.field:focus{border-color:var(--accent);outline:none}
+.btn{background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-weight:500;white-space:nowrap}
+.btn:hover{border-color:#3d4352}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.small{padding:5px 10px;font-size:13px}
+.status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+.dot{width:9px;height:9px;border-radius:50%;background:#4a505e}
+.status.on .dot{background:var(--ok)} .status.wait .dot{background:var(--accent)} .status.err .dot{background:var(--live)}
+.spacer{flex:1}
+.tally{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:999px;padding:6px 14px 6px 8px;background:var(--panel);font-weight:600}
+.tally .lamp{font:500 11px/1 var(--mono);letter-spacing:.08em;padding:5px 8px;border-radius:999px;background:#3a3f4b;color:var(--muted)}
+.tally.open .lamp{background:var(--live);color:#fff;box-shadow:0 0 12px rgba(229,72,77,.5)}
+.count{font:500 13px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+
+.warn{border:1px solid #5a4a22;background:#231e12;color:#efd9a3;border-radius:8px;padding:10px 14px;font-size:13px}
+.warn code{font-family:var(--mono);font-size:12px}
+
+/* main grid */
+.main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:14px;flex:1;min-height:0}
+@media (max-width:960px){.main{grid-template-columns:minmax(0,1fr)}}
+
+.deck{display:flex;flex-direction:column;gap:10px;min-width:0}
+.stage{background:#08090c;border:1px solid var(--line);border-radius:12px;height:clamp(300px,64vh,820px);container-type:size;display:grid;place-items:center;overflow:hidden;position:relative}
+.stage iframe{border:0;display:block;background:#000}
+.stage .wide{width:min(100cqw,100cqh*16/9);height:min(100cqh,100cqw*9/16)}
+.stage .tall{height:100cqh;width:min(100cqw,100cqh*9/16 + 0px);min-width:min(100cqw,340px)}
+.stage .tweet{height:100cqh;width:min(100cqw,560px);background:#000}
+.empty{text-align:center;max-width:44ch;padding:24px;color:var(--muted)}
+.empty h2{font:700 26px/1.15 var(--display);color:var(--fg);margin:0 0 8px;text-wrap:balance}
+.empty .plats{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin-top:14px}
+
+.now{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.now .meta{flex:1 1 260px;min-width:0}
+.now .title{font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.now .sub{color:var(--muted);font-size:13px}
+.now .sub b{color:var(--fg);font-weight:500}
+.ctrls{display:flex;gap:8px;flex-wrap:wrap}
+
+.chip{display:inline-flex;align-items:center;font:500 11px/1 var(--mono);letter-spacing:.05em;padding:5px 7px;border-radius:5px;border:1px solid currentColor;flex:none}
+.c-youtube{color:var(--yt)} .c-twitch{color:var(--twitch)} .c-tiktok{color:var(--tiktok)} .c-instagram{color:var(--ig)} .c-twitter{color:var(--x)} .c-streamable{color:var(--str)}
+
+/* side panel */
+.side{background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;min-width:0;min-height:0;max-height:calc(64vh + 90px)}
+@media (max-width:960px){.side{max-height:none}}
+.tabs{display:flex;border-bottom:1px solid var(--line);padding:0 6px}
+.tab{background:none;border:0;border-bottom:2px solid transparent;padding:11px 10px 9px;color:var(--muted);font-weight:500}
+.tab[aria-selected="true"]{color:var(--fg);border-color:var(--accent)}
+.tab .n{font:500 11px var(--mono);margin-left:4px;color:var(--muted)}
+.pane{padding:12px;overflow:auto;flex:1;min-height:0;display:flex;flex-direction:column;gap:10px}
+.add{display:flex;gap:8px}
+.list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.item{display:grid;grid-template-columns:22px auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;background:var(--raised);border:1px solid transparent}
+.item:hover{border-color:var(--line)}
+.item .pos{font:500 12px var(--mono);color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.item .txt{min-width:0}
+.item .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.item .u{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .acts{display:flex;gap:4px}
+.icon{background:none;border:1px solid transparent;border-radius:6px;width:28px;height:28px;display:grid;place-items:center;color:var(--muted)}
+.icon:hover{color:var(--fg);border-color:var(--line);background:var(--panel)}
+.icon svg{width:15px;height:15px}
+.hint{color:var(--muted);font-size:13px;margin:4px 2px}
+.row-end{display:flex;justify-content:space-between;align-items:center;gap:8px}
+
+.log{font:12px/1.5 var(--mono);color:var(--muted);display:flex;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none}
+.log .ok{color:var(--ok)} .log .no{color:#e8a2a4}
+
+.set{display:flex;flex-direction:column;gap:16px}
+.set h3{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+.set label.chk{display:flex;align-items:center;gap:9px;padding:4px 0}
+.set .grid2{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px}
+.set .inline{display:flex;align-items:center;gap:10px}
+.set .inline .field{width:80px}
+.set p{margin:0;color:var(--muted);font-size:13px}
+.set code{font-family:var(--mono);font-size:12px;color:var(--fg);background:var(--raised);padding:1px 5px;border-radius:4px}
+.cmds{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
+.cmds code{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <h1 class="brand">Chat Clip Queue<small>Links from chat, one at a time</small></h1>
+    <form class="connect" id="connectForm">
+      <input class="field" id="channel" placeholder="Twitch channel name" autocomplete="off" spellcheck="false" aria-label="Twitch channel name">
+      <button class="btn primary" id="connectBtn" type="submit">Connect</button>
+    </form>
+    <div class="status" id="status"><span class="dot"></span><span id="statusText">Not connected</span></div>
+    <div class="spacer"></div>
+    <span class="count" id="count">0 queued</span>
+    <button class="tally" id="tally" type="button" title="Open or close the queue to chat submissions">
+      <span class="lamp" id="lamp">OPEN</span><span id="tallyText">Taking links</span>
+    </button>
+  </header>
+
+  <div class="warn" id="fileWarn" hidden>
+    You opened this as a local file. Twitch clips and YouTube refuse to play there. Run it from a web address instead: put it on GitHub Pages, or in this folder run <code>python -m http.server 8000</code> and open <code>http://localhost:8000/clip-queue.html</code>.
+  </div>
+
+  <main class="main">
+    <section class="deck" aria-label="Player">
+      <div class="stage" id="stage"></div>
+      <div class="now" id="now">
+        <span id="nowChip"></span>
+        <div class="meta">
+          <div class="title" id="nowTitle">Nothing playing</div>
+          <div class="sub" id="nowSub">Links people post in chat will line up on the right.</div>
+        </div>
+        <div class="ctrls">
+          <button class="btn" id="prevBtn" type="button" title="Previous (P)">Previous</button>
+          <button class="btn primary" id="nextBtn" type="button" title="Next (N)">Next</button>
+          <a class="btn" id="openLink" target="_blank" rel="noopener" hidden>Open original</a>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" data-tab="queue" aria-selected="true">Queue<span class="n" id="nQueue">0</span></button>
+        <button class="tab" role="tab" data-tab="history" aria-selected="false">Played<span class="n" id="nHist">0</span></button>
+        <button class="tab" role="tab" data-tab="log" aria-selected="false">Chat log</button>
+        <button class="tab" role="tab" data-tab="settings" aria-selected="false">Settings</button>
+      </div>
+
+      <div class="pane" data-pane="queue">
+        <form class="add" id="addForm">
+          <input class="field" id="addUrl" placeholder="Paste a link to add it yourself" autocomplete="off" aria-label="Link to add">
+          <button class="btn" type="submit">Add</button>
+        </form>
+        <ul class="list" id="queueList"></ul>
+        <p class="hint" id="queueEmpty">The queue is empty. Connect to a channel and links from chat will appear here.</p>
+        <div class="row-end" id="queueFoot"><span class="hint">Oldest at the top.</span><button class="btn small" id="clearQueue" type="button">Clear queue</button></div>
+      </div>
+
+      <div class="pane" data-pane="history" hidden>
+        <ul class="list" id="histList"></ul>
+        <p class="hint" id="histEmpty">Played links show up here, newest first.</p>
+        <div class="row-end" id="histFoot"><span></span><button class="btn small" id="clearHist" type="button">Clear history</button></div>
+      </div>
+
+      <div class="pane" data-pane="log" hidden>
+        <ul class="log" id="log"></ul>
+      </div>
+
+      <div class="pane" data-pane="settings" hidden>
+        <div class="set">
+          <div>
+            <h3>Who can add links</h3>
+            <select class="field" id="setWho">
+              <option value="all">Everyone</option>
+              <option value="subs">Subs, VIPs and mods</option>
+              <option value="mods">Mods only</option>
+            </select>
+          </div>
+          <div>
+            <h3>Sites</h3>
+            <div class="grid2" id="setPlatforms"></div>
+          </div>
+          <div>
+            <h3>Limits</h3>
+            <div class="inline"><input class="field" type="number" min="0" id="setMax"><span>links per person in the queue (0 = no limit)</span></div>
+            <label class="chk"><input type="checkbox" id="setRepeats"> Allow links that already played</label>
+          </div>
+          <div>
+            <h3>Playback</h3>
+            <label class="chk"><input type="checkbox" id="setAutoYT"> Go to the next link when a YouTube video ends</label>
+            <p>Other sites don't report when they finish, so press Next or N.</p>
+          </div>
+          <div>
+            <h3>Titles</h3>
+            <label class="chk"><input type="checkbox" id="setTitles"> Look up video titles</label>
+            <p>Sends each link to noembed.com to get its title.</p>
+          </div>
+          <div>
+            <h3>Mod commands in chat</h3>
+            <div class="cmds">
+              <code>!cq open</code><span>Start taking links</span>
+              <code>!cq close</code><span>Stop taking links</span>
+              <code>!cq next</code><span>Skip to the next link</span>
+              <code>!cq prev</code><span>Go back one</span>
+              <code>!cq remove name</code><span>Remove someone's links</span>
+              <code>!cq clear</code><span>Empty the queue</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = {
+  get(k, d){ try { const v = localStorage.getItem('cq:'+k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v){ try { localStorage.setItem('cq:'+k, JSON.stringify(v)); } catch {} }
+};
+
+const PLATFORMS = {
+  youtube:   {label:'YouTube',          chip:'YT'},
+  twitch:    {label:'Twitch clips',     chip:'CLIP'},
+  tiktok:    {label:'TikTok',           chip:'TT'},
+  instagram: {label:'Instagram reels',  chip:'IG'},
+  twitter:   {label:'X / Twitter',      chip:'X'},
+  streamable:{label:'Streamable',       chip:'STRM'}
+};
+
+const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true,
+  platforms:Object.fromEntries(Object.keys(PLATFORMS).map(k => [k, true]))};
+const settings = Object.assign({}, defaults, store.get('settings', {}));
+settings.platforms = Object.assign({}, defaults.platforms, settings.platforms);
+let queue = store.get('queue', []);
+let history = store.get('history', []);
+let current = store.get('current', null);
+
+function save(){ store.set('settings', settings); store.set('queue', queue); store.set('history', history.slice(0, 200)); store.set('current', current); }
+
+/* ---------- link parsing ---------- */
+function parseTime(t){
+  if (!t) return 0;
+  if (/^\d+$/.test(t)) return +t;
+  const m = t.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+  return m ? (+m[1]||0)*3600 + (+m[2]||0)*60 + (+m[3]||0) : 0;
+}
+function parseLink(raw){
+  let s = raw.trim().replace(/[)\]}>.,!?'"]+$/, '');
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+  let u; try { u = new URL(s); } catch { return null; }
+  const host = u.hostname.toLowerCase().replace(/^(www|m|mobile)\./, '');
+  const p = u.pathname.split('/').filter(Boolean);
+  const url = u.href;
+
+  const yt = (id, shorts) => /^[\w-]{11}$/.test(id) ? {platform:'youtube', id, url, shape: shorts ? 'tall' : 'wide', start: parseTime(u.searchParams.get('t') || u.searchParams.get('start'))} : null;
+  if (host === 'youtube.com' || host === 'music.youtube.com') {
+    if (p[0] === 'watch') return yt(u.searchParams.get('v') || '');
+    if (['shorts','live','embed'].includes(p[0]) && p[1]) return yt(p[1], p[0] === 'shorts');
+    return null;
+  }
+  if (host === 'youtu.be' && p[0]) return yt(p[0]);
+
+  if (host === 'clips.twitch.tv' && p[0] && p[0] !== 'embed') return {platform:'twitch', id:p[0], url, shape:'wide'};
+  if (host === 'twitch.tv' && p[1] === 'clip' && p[2]) return {platform:'twitch', id:p[2], url, shape:'wide', channel:p[0]};
+
+  if (host === 'vm.tiktok.com' || host === 'vt.tiktok.com' || (host === 'tiktok.com' && p[0] === 't'))
+    return {platform:'tiktok', id:null, url, shape:'tall', shortLink:true};
+  if (host === 'tiktok.com') {
+    const id = p.find(x => /^\d{15,}$/.test(x));
+    if (id) return {platform:'tiktok', id, url, shape:'tall', author: (p[0]||'').startsWith('@') ? p[0] : ''};
+    return null;
+  }
+
+  if (host === 'instagram.com') {
+    const i = p.findIndex(x => ['reel','reels','p','tv'].includes(x));
+    if (i >= 0 && p[i+1]) return {platform:'instagram', id:p[i+1], kind: p[i] === 'p' ? 'p' : 'reel', url, shape:'tall'};
+    return null;
+  }
+
+  if (['twitter.com','x.com','fxtwitter.com','vxtwitter.com','fixupx.com','fixvx.com','fxtwitter.com'].includes(host)) {
+    const i = p.indexOf('status');
+    if (i >= 0 && /^\d+$/.test(p[i+1]||'')) return {platform:'twitter', id:p[i+1], url, shape:'tweet', author: i > 0 && p[0] !== 'i' ? '@'+p[0] : ''};
+    return null;
+  }
+
+  if (host === 'streamable.com' && p[0]) {
+    const id = p[0] === 'e' || p[0] === 'o' ? p[1] : p[0];
+    if (id) return {platform:'streamable', id, url, shape:'wide'};
+  }
+  return null;
+}
+function findLinks(text){
+  const out = [];
+  const re = /\b((?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s]+)/gi;
+  let m; while ((m = re.exec(text))) { const l = parseLink(m[1]); if (l) out.push(l); }
+  return out;
+}
+function defaultTitle(it){
+  switch (it.platform) {
+    case 'youtube': return it.shape === 'tall' ? 'YouTube Short' : 'YouTube video';
+    case 'twitch': return it.channel ? `Clip from ${it.channel}` : 'Twitch clip';
+    case 'tiktok': return it.author ? `TikTok by ${it.author}` : 'TikTok';
+    case 'instagram': return it.kind === 'p' ? 'Instagram post' : 'Instagram reel';
+    case 'twitter': return it.author ? `Post by ${it.author}` : 'Post on X';
+    case 'streamable': return 'Streamable video';
+  }
+  return it.url;
+}
+const keyOf = it => it.platform + ':' + (it.id || it.url);
+
+/* ---------- queue ops ---------- */
+function addLink(link, user, {manual = false} = {}){
+  if (!settings.platforms[link.platform]) return `${PLATFORMS[link.platform].label} is turned off`;
+  const key = keyOf(link);
+  if (queue.some(q => q.key === key) || (current && current.key === key)) return 'already in the queue';
+  if (!settings.allowRepeats && !manual && history.some(h => h.key === key)) return 'already played';
+  if (!manual && settings.maxPerUser > 0 && queue.filter(q => q.user.toLowerCase() === user.toLowerCase()).length >= settings.maxPerUser)
+    return `${user} already has ${settings.maxPerUser} in the queue`;
+  const item = {...link, key, user, title: defaultTitle(link), added: Date.now()};
+  queue.push(item);
+  if (!current) playNext(); else { save(); render(); }
+  fetchTitle(item);
+  return null;
+}
+async function fetchTitle(item){
+  if (!settings.titles || item.shortLink) return;
+  try {
+    const r = await fetch('https://noembed.com/embed?url=' + encodeURIComponent(item.url));
+    const j = await r.json();
+    if (j && j.title) {
+      const t = String(j.title).replace(/\s+/g, ' ').trim().slice(0, 160);
+      for (const it of [current, ...queue, ...history]) if (it && it.key === item.key) it.title = t;
+      save(); render(); if (current && current.key === item.key) renderNow();
+    }
+  } catch {}
+}
+function playNext(){
+  if (current) history.unshift(current);
+  current = queue.shift() || null;
+  save(); renderPlayer(); render();
+}
+function playPrev(){
+  if (!history.length) return;
+  if (current) queue.unshift(current);
+  current = history.shift();
+  save(); renderPlayer(); render();
+}
+function playNow(key){
+  const i = queue.findIndex(q => q.key === key); if (i < 0) return;
+  const [it] = queue.splice(i, 1);
+  if (current) history.unshift(current);
+  current = it; save(); renderPlayer(); render();
+}
+function replay(key){
+  const it = history.find(h => h.key === key); if (!it) return;
+  if (current) queue.unshift(current);
+  history = history.filter(h => h !== it);
+  current = it; save(); renderPlayer(); render();
+}
+
+/* ---------- player ---------- */
+function embedSrc(it){
+  const host = location.hostname || 'localhost';
+  switch (it.platform) {
+    case 'youtube': return `https://www.youtube.com/embed/${it.id}?autoplay=1&enablejsapi=1&rel=0&playsinline=1${it.start ? '&start=' + it.start : ''}&origin=${encodeURIComponent(location.origin)}`;
+    case 'twitch': return `https://clips.twitch.tv/embed?clip=${encodeURIComponent(it.id)}&parent=${encodeURIComponent(host)}&autoplay=true&muted=false`;
+    case 'tiktok': return `https://www.tiktok.com/player/v1/${it.id}?autoplay=1&loop=0&rel=0&music_info=1&description=1`;
+    case 'instagram': return `https://www.instagram.com/${it.kind === 'p' ? 'p' : 'reel'}/${encodeURIComponent(it.id)}/embed/`;
+    case 'twitter': return `https://platform.twitter.com/embed/Tweet.html?id=${it.id}&theme=dark&dnt=true`;
+    case 'streamable': return `https://streamable.com/e/${encodeURIComponent(it.id)}?autoplay=1`;
+  }
+}
+function renderPlayer(){
+  const stage = $('#stage');
+  stage.innerHTML = '';
+  if (!current) {
+    stage.innerHTML = `<div class="empty"><h2>${settings.channel ? 'Waiting for links from chat' : 'Connect a channel to start'}</h2>
+      <div>When someone posts a supported link in chat it lands in the queue and plays here.</div>
+      <div class="plats">${Object.keys(PLATFORMS).map(k => `<span class="chip c-${k}">${PLATFORMS[k].label}</span>`).join('')}</div></div>`;
+  } else if (current.shortLink) {
+    stage.innerHTML = `<div class="empty"><h2>Short TikTok link</h2>
+      <div>Short links like vm.tiktok.com can't be played here because the page can't follow the redirect. Open it, or ask chat for the full tiktok.com/@name/video/… link.</div>
+      <p><a class="btn primary" href="${esc(current.url)}" target="_blank" rel="noopener">Open in TikTok</a></p></div>`;
+  } else {
+    const f = document.createElement('iframe');
+    f.className = current.shape;
+    f.src = embedSrc(current);
+    f.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture; clipboard-write';
+    f.allowFullscreen = true;
+    f.referrerPolicy = 'strict-origin-when-cross-origin';
+    f.title = current.title;
+    if (current.platform === 'youtube') f.addEventListener('load', () => hookYouTube(f));
+    stage.appendChild(f);
+  }
+  renderNow();
+}
+function renderNow(){
+  const it = current;
+  $('#nowChip').innerHTML = it ? `<span class="chip c-${it.platform}">${PLATFORMS[it.platform].chip}</span>` : '';
+  $('#nowTitle').textContent = it ? it.title : 'Nothing playing';
+  $('#nowSub').innerHTML = it ? `Sent by <b>${esc(it.user)}</b> · ${esc(PLATFORMS[it.platform].label)}` : 'Links people post in chat will line up on the right.';
+  const a = $('#openLink'); a.hidden = !it; if (it) a.href = it.url;
+  $('#prevBtn').disabled = !history.length;
+  $('#nextBtn').disabled = !current && !queue.length;
+}
+let ytFrame = null;
+function hookYouTube(f){
+  ytFrame = f;
+  const send = o => { try { f.contentWindow.postMessage(JSON.stringify(o), '*'); } catch {} };
+  send({event:'listening', id:1, channel:'widget'});
+  send({event:'command', func:'addEventListener', args:['onStateChange'], id:1, channel:'widget'});
+}
+window.addEventListener('message', e => {
+  if (!/youtube\.com$/.test(new URL(e.origin || 'https://x.invalid').hostname)) return;
+  if (!ytFrame || e.source !== ytFrame.contentWindow || !settings.autoNextYT) return;
+  let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data; } catch { return; }
+  const ended = (d.event === 'onStateChange' && d.info === 0) || (d.event === 'infoDelivery' && d.info && d.info.playerState === 0);
+  if (ended && current && current.platform === 'youtube') { ytFrame = null; playNext(); }
+});
+
+/* ---------- lists ---------- */
+const ICON = {
+  play:'<svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5z"/></svg>',
+  x:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
+  link:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h4v4M13 3L7 9M11 10v3H3V5h3"/></svg>'
+};
+function rowHTML(it, i, acts){
+  return `<li class="item" data-key="${esc(it.key)}">
+    <span class="pos">${i + 1}</span>
+    <span class="chip c-${it.platform}">${PLATFORMS[it.platform].chip}</span>
+    <div class="txt"><div class="t" title="${esc(it.title)}">${esc(it.title)}</div><div class="u">${esc(it.user)}</div></div>
+    <div class="acts">${acts}</div></li>`;
+}
+function render(){
+  $('#queueList').innerHTML = queue.map((it, i) => rowHTML(it, i,
+    `<button class="icon" data-act="play" title="Play now" aria-label="Play now">${ICON.play}</button>
+     <button class="icon" data-act="remove" title="Remove" aria-label="Remove">${ICON.x}</button>`)).join('');
+  $('#histList').innerHTML = history.slice(0, 100).map((it, i) => rowHTML(it, i,
+    `<button class="icon" data-act="replay" title="Play again" aria-label="Play again">${ICON.play}</button>
+     <a class="icon" href="${esc(it.url)}" target="_blank" rel="noopener" title="Open original" aria-label="Open original">${ICON.link}</a>`)).join('');
+  $('#queueEmpty').hidden = queue.length > 0; $('#queueFoot').hidden = !queue.length;
+  $('#histEmpty').hidden = history.length > 0; $('#histFoot').hidden = !history.length;
+  $('#nQueue').textContent = queue.length; $('#nHist').textContent = history.length;
+  $('#count').textContent = `${queue.length} queued`;
+  const t = $('#tally'); t.classList.toggle('open', settings.open);
+  $('#lamp').textContent = settings.open ? 'OPEN' : 'CLOSED';
+  $('#tallyText').textContent = settings.open ? 'Taking links' : 'Not taking links';
+  renderNow();
+}
+$('#queueList').addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const key = b.closest('.item').dataset.key;
+  if (b.dataset.act === 'play') playNow(key);
+  if (b.dataset.act === 'remove') { queue = queue.filter(q => q.key !== key); save(); render(); }
+});
+$('#histList').addEventListener('click', e => {
+  const b = e.target.closest('[data-act="replay"]'); if (b) replay(b.closest('.item').dataset.key);
+});
+
+/* ---------- log ---------- */
+function log(text, cls = ''){
+  const li = document.createElement('li');
+  const t = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  li.innerHTML = `<span>${t}</span> <span class="${cls}">${esc(text)}</span>`;
+  const ul = $('#log'); ul.prepend(li);
+  while (ul.children.length > 80) ul.lastChild.remove();
+}
+
+/* ---------- Twitch chat (anonymous, read-only) ---------- */
+let ws = null, retry = 0, retryTimer = null, wantChannel = '';
+function setStatus(state, text){ const s = $('#status'); s.className = 'status ' + state; $('#statusText').textContent = text; }
+function connect(channel){
+  channel = channel.trim().toLowerCase().replace(/^#/, '').replace(/^https?:\/\/(www\.)?twitch\.tv\//, '').split(/[/?]/)[0];
+  if (!channel) return;
+  wantChannel = channel; settings.channel = channel; save();
+  $('#channel').value = channel;
+  clearTimeout(retryTimer);
+  if (ws) { ws.onclose = null; ws.close(); }
+  setStatus('wait', `Connecting to ${channel}…`);
+  ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+  ws.onopen = () => {
+    ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+    ws.send('PASS SCHMOOPIIE');
+    ws.send('NICK justinfan' + Math.floor(10000 + Math.random() * 80000));
+    ws.send('JOIN #' + channel);
+  };
+  ws.onmessage = e => String(e.data).split('\r\n').forEach(line => line && handleLine(line));
+  ws.onclose = () => {
+    setStatus('err', 'Disconnected, retrying…');
+    retry = Math.min(retry + 1, 6);
+    retryTimer = setTimeout(() => connect(wantChannel), 1000 * 2 ** retry);
+  };
+  renderPlayer();
+}
+function parseIRC(line){
+  const msg = {tags:{}, prefix:'', command:'', params:[], trailing:''};
+  if (line[0] === '@') {
+    const i = line.indexOf(' ');
+    line.slice(1, i).split(';').forEach(kv => { const j = kv.indexOf('='); msg.tags[kv.slice(0, j)] = kv.slice(j + 1); });
+    line = line.slice(i + 1);
+  }
+  if (line[0] === ':') { const i = line.indexOf(' '); msg.prefix = line.slice(1, i); line = line.slice(i + 1); }
+  const ti = line.indexOf(' :');
+  if (ti >= 0) { msg.trailing = line.slice(ti + 2); line = line.slice(0, ti); }
+  const parts = line.split(' '); msg.command = parts[0]; msg.params = parts.slice(1);
+  return msg;
+}
+function handleLine(line){
+  const m = parseIRC(line);
+  if (m.command === 'PING') { ws.send('PONG :' + (m.trailing || 'tmi.twitch.tv')); return; }
+  if (m.command === 'ROOMSTATE' || (m.command === '366')) { retry = 0; setStatus('on', `Connected to ${wantChannel}`); return; }
+  if (m.command === 'NOTICE' && m.trailing) { log(m.trailing, 'no'); return; }
+  if (m.command !== 'PRIVMSG') return;
+  const user = m.tags['display-name'] || m.prefix.split('!')[0];
+  const badges = m.tags.badges || '';
+  const isMod = /(^|,)(broadcaster|moderator)\//.test(badges) || m.tags.mod === '1';
+  const isSubLike = isMod || /(^|,)(subscriber|founder|vip)\//.test(badges) || m.tags.subscriber === '1';
+  let text = m.trailing;
+  if (text.startsWith('\u0001ACTION ')) text = text.slice(8, -1);
+
+  if (/^!cq\b/i.test(text)) { if (isMod) command(text.slice(3).trim(), user); return; }
+
+  const links = findLinks(text);
+  if (!links.length) return;
+  if (!settings.open) { log(`${user}: queue is closed`, 'no'); return; }
+  if (settings.who === 'mods' && !isMod) { log(`${user}: only mods can add links`, 'no'); return; }
+  if (settings.who === 'subs' && !isSubLike) { log(`${user}: only subs, VIPs and mods can add links`, 'no'); return; }
+  for (const l of links) {
+    const why = addLink(l, user);
+    log(why ? `${user}: skipped, ${why}` : `${user} added ${PLATFORMS[l.platform].label}`, why ? 'no' : 'ok');
+  }
+}
+function command(rest, user){
+  const [cmd, ...args] = rest.split(/\s+/);
+  switch ((cmd || '').toLowerCase()) {
+    case 'open': settings.open = true; save(); render(); log(`${user} opened the queue`, 'ok'); break;
+    case 'close': settings.open = false; save(); render(); log(`${user} closed the queue`, 'no'); break;
+    case 'next': case 'skip': playNext(); log(`${user} skipped`); break;
+    case 'prev': case 'back': playPrev(); log(`${user} went back`); break;
+    case 'clear': queue = []; save(); render(); log(`${user} cleared the queue`); break;
+    case 'remove': {
+      const who = (args[0] || '').replace(/^@/, '').toLowerCase(); if (!who) break;
+      const n = queue.length; queue = queue.filter(q => q.user.toLowerCase() !== who);
+      save(); render(); log(`${user} removed ${n - queue.length} from ${who}`); break;
+    }
+  }
+}
+
+/* ---------- UI wiring ---------- */
+$('#connectForm').addEventListener('submit', e => { e.preventDefault(); connect($('#channel').value); });
+$('#addForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = $('#addUrl').value.trim(); if (!v) return;
+  const l = parseLink(v);
+  if (!l) { log(`Not a supported link: ${v}`, 'no'); $('#addUrl').select(); return; }
+  const why = addLink(l, 'You', {manual:true});
+  log(why ? `Skipped, ${why}` : `You added ${PLATFORMS[l.platform].label}`, why ? 'no' : 'ok');
+  if (!why) $('#addUrl').value = '';
+});
+$('#nextBtn').addEventListener('click', playNext);
+$('#prevBtn').addEventListener('click', playPrev);
+$('#tally').addEventListener('click', () => { settings.open = !settings.open; save(); render(); });
+$('#clearQueue').addEventListener('click', e => {
+  const b = e.currentTarget;
+  if (b.dataset.armed) { queue = []; save(); render(); delete b.dataset.armed; b.textContent = 'Clear queue'; }
+  else { b.dataset.armed = '1'; b.textContent = 'Click again to clear'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'Clear queue'; }, 3000); }
+});
+$('#clearHist').addEventListener('click', () => { history = []; save(); render(); });
+
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
+  document.querySelectorAll('.pane').forEach(p => p.hidden = p.dataset.pane !== t.dataset.tab);
+}));
+
+// settings
+$('#setPlatforms').innerHTML = Object.entries(PLATFORMS).map(([k, v]) =>
+  `<label class="chk"><input type="checkbox" id="plat-${k}" data-plat="${k}" ${settings.platforms[k] ? 'checked' : ''}> ${v.label}</label>`).join('');
+$('#setPlatforms').addEventListener('change', e => { const k = e.target.dataset.plat; if (k) { settings.platforms[k] = e.target.checked; save(); } });
+$('#setWho').value = settings.who;
+$('#setWho').addEventListener('change', e => { settings.who = e.target.value; save(); });
+$('#setMax').value = settings.maxPerUser;
+$('#setMax').addEventListener('change', e => { settings.maxPerUser = Math.max(0, parseInt(e.target.value, 10) || 0); e.target.value = settings.maxPerUser; save(); });
+$('#setRepeats').checked = settings.allowRepeats;
+$('#setRepeats').addEventListener('change', e => { settings.allowRepeats = e.target.checked; save(); });
+$('#setAutoYT').checked = settings.autoNextYT;
+$('#setAutoYT').addEventListener('change', e => { settings.autoNextYT = e.target.checked; save(); });
+$('#setTitles').checked = settings.titles;
+$('#setTitles').addEventListener('change', e => { settings.titles = e.target.checked; save(); });
+
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'n' || e.key === 'N') playNext();
+  if (e.key === 'p' || e.key === 'P') playPrev();
+});
+
+if (location.protocol === 'file:') $('#fileWarn').hidden = false;
+$('#channel').value = settings.channel;
+renderPlayer(); render();
+log('Ready. Enter a channel name and press Connect.');
+if (settings.channel) connect(settings.channel);
+
+window.__cq = {parseLink, findLinks};
+})();
+</script>
+</body>
+</html>
