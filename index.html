@@ -205,8 +205,8 @@ button{cursor:pointer}
             <h3>Playback</h3>
             <label class="chk"><input type="checkbox" id="setAutoYT"> Go to the next link when a YouTube video ends</label>
             <p>Other sites don't report when they finish, so press Next or N.</p>
-            <label class="chk"><input type="checkbox" id="setIgCrop"> Show only the video for Instagram reels</label>
-            <p>Hides Instagram's header, likes and comments so the reel fills the player. Turn off if a reel looks cut off.</p>
+            <label class="chk"><input type="checkbox" id="setIgCrop"> Show only the video for Instagram</label>
+            <p>Hides Instagram's header, likes and comments so the video fills the player. Turn this off for photo posts, which will look cut off.</p>
           </div>
           <div>
             <h3>Titles</h3>
@@ -412,7 +412,7 @@ function renderPlayer(){
     f.referrerPolicy = 'strict-origin-when-cross-origin';
     f.title = current.title;
     if (current.platform === 'youtube') f.addEventListener('load', () => hookYouTube(f));
-    if (current.platform === 'instagram' && current.kind !== 'p' && settings.igCrop) {
+    if (current.platform === 'instagram' && settings.igCrop) {
       f.className = '';
       const wrap = document.createElement('div');
       wrap.className = 'igcrop';
