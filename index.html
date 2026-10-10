@@ -33,7 +33,8 @@ button{cursor:pointer}
 .bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px}
 .brand{font:700 22px/1 var(--display);letter-spacing:-.01em;margin:0;white-space:nowrap}
 .brand small{display:block;font:500 11px/1.4 var(--mono);color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-top:4px}
-.connect{display:flex;gap:8px;flex:1 1 300px;max-width:440px}
+.connect{display:flex;gap:8px;flex:1 1 260px;max-width:380px}
+.src{font:500 11px var(--mono);letter-spacing:.04em;color:var(--muted)}
 .field{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 11px;min-width:0;width:100%}
 .field:focus{border-color:var(--accent);outline:none}
 .btn{background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-weight:500;white-space:nowrap}
@@ -127,6 +128,11 @@ button{cursor:pointer}
       <button class="btn primary" id="connectBtn" type="submit">Connect</button>
     </form>
     <div class="status" id="status"><span class="dot"></span><span id="statusText">Not connected</span></div>
+    <form class="connect yt" id="ytForm">
+      <input class="field" id="ytTarget" placeholder="YouTube stream link or @handle" autocomplete="off" spellcheck="false" aria-label="YouTube stream link or channel handle">
+      <button class="btn" id="ytBtn" type="submit">Connect YouTube</button>
+    </form>
+    <div class="status" id="ytStatus"><span class="dot"></span><span id="ytStatusText">YouTube not connected</span></div>
     <div class="spacer"></div>
     <span class="count" id="count">0 queued</span>
     <button class="tally" id="tally" type="button" title="Open or close the queue to chat submissions">
@@ -210,6 +216,16 @@ button{cursor:pointer}
             <p>Hides Instagram's header, likes and comments so the video fills the player. Turn this off for photo posts, which will look cut off.</p>
           </div>
           <div>
+            <h3>YouTube chat</h3>
+            <p>Reading YouTube chat needs your own free API key. It's saved only in this browser.</p>
+            <div class="inline" style="margin-top:8px"><input class="field" id="setYtKey" type="password" placeholder="Paste API key" autocomplete="off" spellcheck="false" style="width:100%"></div>
+            <div class="inline" style="margin-top:8px"><span>Check chat every</span>
+              <select class="field" id="setYtPoll" style="width:auto">
+                <option value="5">5 seconds</option><option value="10">10 seconds</option><option value="15">15 seconds</option><option value="20">20 seconds</option><option value="30">30 seconds</option>
+              </select></div>
+            <p id="ytBudget" style="margin-top:6px"></p>
+          </div>
+          <div>
             <h3>Titles</h3>
             <label class="chk"><input type="checkbox" id="setTitles"> Look up video titles</label>
             <p>Sends each link to noembed.com to get its title.</p>
@@ -250,7 +266,7 @@ const PLATFORMS = {
   streamable:{label:'Streamable',       chip:'STRM'}
 };
 
-const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true,
+const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'',
   platforms:Object.fromEntries(Object.keys(PLATFORMS).map(k => [k, true]))};
 const settings = Object.assign({}, defaults, store.get('settings', {}));
 settings.platforms = Object.assign({}, defaults.platforms, settings.platforms);
@@ -332,14 +348,14 @@ function defaultTitle(it){
 const keyOf = it => it.platform + ':' + (it.id || it.url);
 
 /* ---------- queue ops ---------- */
-function addLink(link, user, {manual = false} = {}){
+function addLink(link, user, {manual = false, source = manual ? '' : 'Twitch'} = {}){
   if (!settings.platforms[link.platform]) return `${PLATFORMS[link.platform].label} is turned off`;
   const key = keyOf(link);
   if (queue.some(q => q.key === key) || (current && current.key === key)) return 'already in the queue';
   if (!settings.allowRepeats && !manual && history.some(h => h.key === key)) return 'already played';
   if (!manual && settings.maxPerUser > 0 && queue.filter(q => q.user.toLowerCase() === user.toLowerCase()).length >= settings.maxPerUser)
     return `${user} already has ${settings.maxPerUser} in the queue`;
-  const item = {...link, key, user, title: defaultTitle(link), added: Date.now()};
+  const item = {...link, key, user, source, title: defaultTitle(link), added: Date.now()};
   queue.push(item);
   if (!current) playNext(); else { save(); render(); }
   fetchTitle(item);
@@ -432,7 +448,7 @@ function renderNow(){
   const it = current;
   $('#nowChip').innerHTML = it ? `<span class="chip c-${it.platform}">${PLATFORMS[it.platform].chip}</span>` : '';
   $('#nowTitle').textContent = it ? it.title : 'Nothing playing';
-  $('#nowSub').innerHTML = it ? `Sent by <b>${esc(it.user)}</b> · ${esc(PLATFORMS[it.platform].label)}` : 'Links people post in chat will line up on the right.';
+  $('#nowSub').innerHTML = it ? `Sent by <b>${esc(it.user)}</b>${it.source ? ' on ' + esc(it.source) : ''} · ${esc(PLATFORMS[it.platform].label)}` : 'Links people post in chat will line up on the right.';
   const a = $('#openLink'); a.hidden = !it; if (it) a.href = it.url;
   $('#prevBtn').disabled = !history.length;
   $('#nextBtn').disabled = !current && !queue.length;
@@ -501,7 +517,7 @@ function rowHTML(it, i, acts){
   return `<li class="item" data-key="${esc(it.key)}">
     <span class="pos">${i + 1}</span>
     <span class="chip c-${it.platform}">${PLATFORMS[it.platform].chip}</span>
-    <div class="txt"><div class="t" title="${esc(it.title)}">${esc(it.title)}</div><div class="u">${esc(it.user)}</div></div>
+    <div class="txt"><div class="t" title="${esc(it.title)}">${esc(it.title)}</div><div class="u">${esc(it.user)}${it.source ? ' <span class="src">· ' + esc(it.source) + '</span>' : ''}</div></div>
     <div class="acts">${acts}</div></li>`;
 }
 function render(){
@@ -591,17 +607,136 @@ function handleLine(line){
   let text = m.trailing;
   if (text.startsWith('\u0001ACTION ')) text = text.slice(8, -1);
 
-  if (/^!cq\b/i.test(text)) { if (isMod) command(text.slice(3).trim(), user); return; }
-
+  handleChat({user, text, isMod, isSubLike, source:'Twitch'});
+}
+function handleChat({user, text, isMod, isSubLike, source}){
+  const tag = source === 'YouTube' ? ' (YT)' : '';
+  if (/^!cq\b/i.test(text)) { if (isMod) command(text.slice(3).trim(), user + tag); return; }
   const links = findLinks(text);
   if (!links.length) return;
-  if (!settings.open) { log(`${user}: queue is closed`, 'no'); return; }
-  if (settings.who === 'mods' && !isMod) { log(`${user}: only mods can add links`, 'no'); return; }
-  if (settings.who === 'subs' && !isSubLike) { log(`${user}: only subs, VIPs and mods can add links`, 'no'); return; }
+  if (!settings.open) { log(`${user}${tag}: queue is closed`, 'no'); return; }
+  if (settings.who === 'mods' && !isMod) { log(`${user}${tag}: only mods can add links`, 'no'); return; }
+  if (settings.who === 'subs' && !isSubLike) { log(`${user}${tag}: only subs, members and mods can add links`, 'no'); return; }
   for (const l of links) {
-    const why = addLink(l, user);
-    log(why ? `${user}: skipped, ${why}` : `${user} added ${PLATFORMS[l.platform].label}`, why ? 'no' : 'ok');
+    const why = addLink(l, user, {source});
+    log(why ? `${user}${tag}: skipped, ${why}` : `${user}${tag} added ${PLATFORMS[l.platform].label}`, why ? 'no' : 'ok');
   }
+}
+
+/* ---------- YouTube live chat (Data API v3, polled) ---------- */
+const YT_API = 'https://www.googleapis.com/youtube/v3/';
+const yt = {chatId:'', page:'', timer:null, run:0, label:''};
+function ytSetStatus(state, text){ const s = $('#ytStatus'); s.className = 'status ' + state; $('#ytStatusText').textContent = text; }
+async function ytGet(path, params){
+  const q = new URLSearchParams({...params, key: settings.ytKey});
+  const r = await fetch(YT_API + path + '?' + q);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) {
+    const reason = j.error && j.error.errors && j.error.errors[0] ? j.error.errors[0].reason : '';
+    const err = new Error(j.error ? j.error.message : 'HTTP ' + r.status); err.reason = reason; err.status = r.status; throw err;
+  }
+  return j;
+}
+function ytVideoId(s){
+  const l = parseLink(s);
+  if (l && l.platform === 'youtube') return l.id;
+  try {
+    const u = new URL(/^https?:/i.test(s) ? s : 'https://' + s);
+    const m = u.pathname.match(/^\/live\/([\w-]{11})/); if (m) return m[1];
+  } catch {}
+  return /^[\w-]{11}$/.test(s) ? s : '';
+}
+function ytChannelRef(s){
+  s = s.trim();
+  if (/^@[\w.-]+$/.test(s)) return {forHandle: s};
+  if (/^UC[\w-]{22}$/.test(s)) return {id: s};
+  try {
+    const u = new URL(/^https?:/i.test(s) ? s : 'https://' + s);
+    if (!/(^|\.)youtube\.com$/.test(u.hostname)) return null;
+    const p = u.pathname.split('/').filter(Boolean);
+    if (p[0] && p[0].startsWith('@')) return {forHandle: p[0]};
+    if (p[0] === 'channel' && p[1]) return {id: p[1]};
+  } catch {}
+  return null;
+}
+function ytExplain(e){
+  if (e.reason === 'quotaExceeded' || e.reason === 'dailyLimitExceeded') return "Today's YouTube allowance is used up. It resets at 8am UK time (midnight Pacific).";
+  if (e.reason === 'keyInvalid' || /API key not valid/i.test(e.message)) return 'The API key was rejected. Check it in Settings.';
+  if (e.reason === 'accessNotConfigured' || /has not been used|is disabled/i.test(e.message)) return 'YouTube Data API v3 is not turned on for this key yet. Enable it in Google Cloud and try again.';
+  if (e.reason === 'liveChatEnded') return 'The stream has ended, so its chat is closed.';
+  if (e.reason === 'liveChatNotFound' || e.reason === 'liveChatDisabled') return 'Chat for this stream is off or no longer available.';
+  if (/referer|referrer/i.test(e.message)) return 'The key is restricted to another website. Add this page’s address to its allowed websites.';
+  return e.message;
+}
+function ytStop(state = '', text = 'YouTube not connected'){
+  yt.run++; clearTimeout(yt.timer); yt.chatId = ''; yt.page = '';
+  ytSetStatus(state, text); $('#ytBtn').textContent = 'Connect YouTube';
+}
+async function ytConnect(target){
+  target = target.trim();
+  if (!target) return;
+  if (!settings.ytKey) {
+    ytSetStatus('err', 'Add your API key in Settings first');
+    document.querySelector('.tab[data-tab="settings"]').click(); $('#setYtKey').focus(); return;
+  }
+  settings.ytTarget = target; save();
+  ytStop('wait', 'Finding the live stream…');
+  const run = yt.run;
+  try {
+    let vid = ytVideoId(target), chan = vid ? null : ytChannelRef(target), label = '';
+    if (!vid && !chan) { ytStop('err', 'Use a stream link or an @handle'); return; }
+    if (chan) {
+      const c = await ytGet('channels', {part:'snippet', ...chan});
+      if (!c.items || !c.items.length) { ytStop('err', 'No channel found for ' + target); return; }
+      label = c.items[0].snippet.title;
+      const sr = await ytGet('search', {part:'id', channelId:c.items[0].id, eventType:'live', type:'video', maxResults:1});
+      if (!sr.items || !sr.items.length) { ytStop('err', `${label} isn't live right now`); return; }
+      vid = sr.items[0].id.videoId;
+    }
+    const v = await ytGet('videos', {part:'liveStreamingDetails,snippet', id:vid});
+    const item = v.items && v.items[0];
+    if (!item) { ytStop('err', 'Video not found'); return; }
+    const chatId = item.liveStreamingDetails && item.liveStreamingDetails.activeLiveChatId;
+    if (!chatId) { ytStop('err', "That video isn't live, or its chat is off"); return; }
+    if (run !== yt.run) return;
+    yt.chatId = chatId; yt.label = label || item.snippet.channelTitle;
+    $('#ytBtn').textContent = 'Disconnect';
+    ytPoll(run, true);
+  } catch (e) { if (run === yt.run) { ytStop('err', 'YouTube error'); log('YouTube: ' + ytExplain(e), 'no'); } }
+}
+async function ytPoll(run, first = false){
+  if (run !== yt.run || !yt.chatId) return;
+  let wait = settings.ytPoll * 1000;
+  try {
+    const params = {liveChatId: yt.chatId, part:'snippet,authorDetails', maxResults: 200};
+    if (yt.page) params.pageToken = yt.page;
+    const r = await ytGet('liveChat/messages', params);
+    if (run !== yt.run) return;
+    yt.page = r.nextPageToken || yt.page;
+    wait = Math.max(wait, +r.pollingIntervalMillis || 0);
+    ytSetStatus('on', `Connected to ${yt.label} on YouTube`);
+    if (first) log(`Connected to ${yt.label} on YouTube. Messages from before now are ignored.`, 'ok');
+    else for (const m of r.items || []) {
+      const sn = m.snippet || {}, a = m.authorDetails || {};
+      const text = sn.displayMessage || (sn.textMessageDetails && sn.textMessageDetails.messageText) || (sn.superChatDetails && sn.superChatDetails.userComment) || '';
+      if (!text) continue;
+      const isMod = !!(a.isChatOwner || a.isChatModerator);
+      handleChat({user: a.displayName || 'YouTube viewer', text, isMod, isSubLike: isMod || !!a.isChatSponsor, source:'YouTube'});
+    }
+  } catch (e) {
+    if (run !== yt.run) return;
+    const fatal = ['quotaExceeded','dailyLimitExceeded','keyInvalid','accessNotConfigured','liveChatEnded','liveChatNotFound','liveChatDisabled','forbidden'].includes(e.reason) || e.status === 400 || e.status === 403 || e.status === 404;
+    log('YouTube: ' + ytExplain(e), 'no');
+    if (fatal) { ytStop('err', e.reason === 'liveChatEnded' ? 'YouTube stream ended' : 'YouTube stopped, see Chat log'); return; }
+    ytSetStatus('wait', 'YouTube connection hiccup, retrying…');
+    wait = Math.max(wait, 15000);
+  }
+  yt.timer = setTimeout(() => ytPoll(run), wait);
+}
+function ytBudgetText(){
+  const perHour = 3600 / settings.ytPoll * 5;
+  const hours = Math.floor((10000 - 105) / perHour * 2) / 2;
+  $('#ytBudget').textContent = `At this rate the free daily allowance covers about ${hours} hours of streaming. Slower checks last longer but links show up later.`;
 }
 function command(rest, user){
   const [cmd, ...args] = rest.split(/\s+/);
@@ -621,6 +756,7 @@ function command(rest, user){
 
 /* ---------- UI wiring ---------- */
 $('#connectForm').addEventListener('submit', e => { e.preventDefault(); connect($('#channel').value); });
+$('#ytForm').addEventListener('submit', e => { e.preventDefault(); if (yt.chatId) { ytStop(); log('Disconnected from YouTube'); } else ytConnect($('#ytTarget').value); });
 $('#addForm').addEventListener('submit', e => {
   e.preventDefault();
   const v = $('#addUrl').value.trim(); if (!v) return;
@@ -659,6 +795,12 @@ $('#setAutoYT').checked = settings.autoNextYT;
 $('#setAutoYT').addEventListener('change', e => { settings.autoNextYT = e.target.checked; save(); });
 $('#setIgCrop').checked = settings.igCrop;
 $('#setIgCrop').addEventListener('change', e => { settings.igCrop = e.target.checked; save(); if (current && current.platform === 'instagram') renderPlayer(); });
+$('#setYtKey').value = settings.ytKey;
+$('#setYtKey').addEventListener('change', e => { settings.ytKey = e.target.value.trim(); save(); });
+$('#setYtPoll').value = String(settings.ytPoll);
+$('#setYtPoll').addEventListener('change', e => { settings.ytPoll = +e.target.value || 10; save(); ytBudgetText(); });
+$('#ytTarget').value = settings.ytTarget;
+ytBudgetText();
 $('#setTitles').checked = settings.titles;
 $('#setTitles').addEventListener('change', e => { settings.titles = e.target.checked; save(); });
 

@@ -4,6 +4,25 @@ Queues video links posted in a Twitch chat and plays them one at a time: Twitch 
 
 **Use it:** open https://portalq.github.io/clip-queue/, type a Twitch channel name and press Connect. It reads chat anonymously, so no login is needed.
 
+## YouTube chat
+
+The queue can read YouTube live chat at the same time as Twitch. YouTube needs a free API key, which you set up once:
+
+1. Go to https://console.cloud.google.com and sign in. Create a project (any name, e.g. `clip-queue`).
+2. Open **APIs & Services → Library**, search for **YouTube Data API v3** and click **Enable**.
+3. Open **APIs & Services → Credentials → Create credentials → API key**.
+4. Click the new key to restrict it:
+   - **Application restrictions:** Websites, then add `https://portalq.github.io/*`
+   - **API restrictions:** Restrict key, then tick **YouTube Data API v3**
+   - Click **Save**.
+5. Copy the key and paste it into **Settings → YouTube chat** on the queue page.
+
+To connect, paste your stream link (or your `@handle`) into the YouTube box at the top and press **Connect YouTube**. A stream link uses less of the daily allowance than an @handle.
+
+The free allowance resets at 8am UK time. Checking every 10 seconds covers about 5 hours of streaming a day; change this under Settings.
+
+YouTube moderators and the channel owner can use the `!cq` commands. Channel members count as "subs" for the "who can add links" setting.
+
 ## Mod commands
 
 | Command | What it does |
