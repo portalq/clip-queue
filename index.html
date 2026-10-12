@@ -84,8 +84,12 @@ button{cursor:pointer}
 /* side panel */
 .side{background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;min-width:0;min-height:0;max-height:calc(64vh + 90px)}
 @media (max-width:960px){.side{max-height:none}}
-.tabs{display:flex;border-bottom:1px solid var(--line);padding:0 6px}
-.tab{background:none;border:0;border-bottom:2px solid transparent;padding:11px 10px 9px;color:var(--muted);font-weight:500}
+.tabs{display:flex;border-bottom:1px solid var(--line);padding:0 6px;overflow-x:auto;scrollbar-width:none}
+.tab{flex:none}
+.tab .n.hot{color:var(--accent-ink);background:var(--accent);border-radius:999px;padding:1px 6px}
+.share{display:flex;gap:8px}
+.share .field{font:12px var(--mono)}
+.tab{background:none;border:0;border-bottom:2px solid transparent;padding:11px 7px 9px;color:var(--muted);font-weight:500;font-size:13px}
 .tab[aria-selected="true"]{color:var(--fg);border-color:var(--accent)}
 .tab .n{font:500 11px var(--mono);margin-left:4px;color:var(--muted)}
 .pane{padding:12px;overflow:auto;flex:1;min-height:0;display:flex;flex-direction:column;gap:10px}
@@ -165,7 +169,8 @@ button{cursor:pointer}
       <div class="tabs" role="tablist">
         <button class="tab" role="tab" data-tab="queue" aria-selected="true">Queue<span class="n" id="nQueue">0</span></button>
         <button class="tab" role="tab" data-tab="history" aria-selected="false">Played<span class="n" id="nHist">0</span></button>
-        <button class="tab" role="tab" data-tab="log" aria-selected="false">Chat log</button>
+        <button class="tab" role="tab" data-tab="requests" aria-selected="false">Requests<span class="n" id="nReq">0</span></button>
+        <button class="tab" role="tab" data-tab="log" aria-selected="false">Log</button>
         <button class="tab" role="tab" data-tab="settings" aria-selected="false">Settings</button>
       </div>
 
@@ -183,6 +188,16 @@ button{cursor:pointer}
         <ul class="list" id="histList"></ul>
         <p class="hint" id="histEmpty">Played links show up here, newest first.</p>
         <div class="row-end" id="histFoot"><span></span><button class="btn small" id="clearHist" type="button">Clear history</button></div>
+      </div>
+
+      <div class="pane" data-pane="requests" hidden>
+        <p class="hint" id="reqOff">Website submissions are off. Turn them on under Settings to get a link viewers can use to send videos without posting in chat.</p>
+        <div id="reqOn" hidden>
+          <div class="row-end"><span class="hint" id="reqHint">Links sent from the website wait here until you approve them.</span>
+            <button class="btn small" id="approveAll" type="button">Approve all</button></div>
+        </div>
+        <ul class="list" id="reqList"></ul>
+        <p class="hint" id="reqEmpty" hidden>No requests waiting.</p>
       </div>
 
       <div class="pane" data-pane="log" hidden>
@@ -214,6 +229,17 @@ button{cursor:pointer}
             <p>Other sites don't report when they finish, so press Next or N.</p>
             <label class="chk"><input type="checkbox" id="setIgCrop"> Show only the video for Instagram</label>
             <p>Hides Instagram's header, likes and comments so the video fills the player. Turn this off for photo posts, which will look cut off.</p>
+          </div>
+          <div>
+            <h3>Website submissions</h3>
+            <label class="chk"><input type="checkbox" id="setWeb"> Let viewers send links from a web page</label>
+            <div id="webBox" hidden>
+              <p style="margin-top:6px">Share this link with viewers. They can add their name or stay anonymous.</p>
+              <div class="share" style="margin-top:8px"><input class="field" id="webLink" readonly aria-label="Submission page link"><button class="btn small" id="webCopy" type="button">Copy</button></div>
+              <label class="chk" style="margin-top:6px"><input type="checkbox" id="setWebReview"> Review website links before they join the queue</label>
+              <div class="inline" style="margin-top:4px"><span id="webConn" class="hint" style="margin:0">Not connected</span><span class="spacer"></span><button class="btn small" id="webNew" type="button">Make a new link</button></div>
+              <p style="margin-top:6px">A new link stops the old one working, which is useful if it gets spammed.</p>
+            </div>
           </div>
           <div>
             <h3>YouTube chat</h3>
@@ -266,7 +292,7 @@ const PLATFORMS = {
   streamable:{label:'Streamable',       chip:'STRM'}
 };
 
-const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'',
+const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'', web:false, webReview:true, webRoom:'',
   platforms:Object.fromEntries(Object.keys(PLATFORMS).map(k => [k, true]))};
 const settings = Object.assign({}, defaults, store.get('settings', {}));
 settings.platforms = Object.assign({}, defaults.platforms, settings.platforms);
@@ -348,14 +374,15 @@ function defaultTitle(it){
 const keyOf = it => it.platform + ':' + (it.id || it.url);
 
 /* ---------- queue ops ---------- */
-function addLink(link, user, {manual = false, source = manual ? '' : 'Twitch'} = {}){
+function addLink(link, user, {manual = false, source = manual ? '' : 'Twitch', uid = ''} = {}){
   if (!settings.platforms[link.platform]) return `${PLATFORMS[link.platform].label} is turned off`;
   const key = keyOf(link);
   if (queue.some(q => q.key === key) || (current && current.key === key)) return 'already in the queue';
   if (!settings.allowRepeats && !manual && history.some(h => h.key === key)) return 'already played';
-  if (!manual && settings.maxPerUser > 0 && queue.filter(q => q.user.toLowerCase() === user.toLowerCase()).length >= settings.maxPerUser)
+  const who = (uid || user).toLowerCase();
+  if (!manual && settings.maxPerUser > 0 && queue.filter(q => (q.uid || q.user).toLowerCase() === who).length >= settings.maxPerUser)
     return `${user} already has ${settings.maxPerUser} in the queue`;
-  const item = {...link, key, user, source, title: defaultTitle(link), added: Date.now()};
+  const item = {...link, key, user, source, uid, title: defaultTitle(link), added: Date.now()};
   queue.push(item);
   if (!current) playNext(); else { save(); render(); }
   fetchTitle(item);
@@ -530,6 +557,7 @@ function render(){
   $('#queueEmpty').hidden = queue.length > 0; $('#queueFoot').hidden = !queue.length;
   $('#histEmpty').hidden = history.length > 0; $('#histFoot').hidden = !history.length;
   $('#nQueue').textContent = queue.length; $('#nHist').textContent = history.length;
+  renderRequests(); webStatusSync();
   $('#count').textContent = `${queue.length} queued`;
   const t = $('#tally'); t.classList.toggle('open', settings.open);
   $('#lamp').textContent = settings.open ? 'OPEN' : 'CLOSED';
@@ -754,6 +782,133 @@ function command(rest, user){
   }
 }
 
+/* ---------- Website submissions (relayed through ntfy.sh) ---------- */
+const NTFY = 'https://ntfy.sh/';
+const web = {es:null, lastId:'', retry:null, run:0, sentOpen:null};
+let requests = store.get('requests', []);
+const saveReq = () => store.set('requests', requests);
+function newRoom(){
+  const a = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const r = crypto.getRandomValues(new Uint8Array(20));
+  return 'cq_' + Array.from(r, b => a[b % a.length]).join('');
+}
+function webLink(){
+  const u = new URL('submit.html', location.href);
+  u.search = new URLSearchParams({room: settings.webRoom, for: settings.channel || yt.label || ''}).toString();
+  return u.href;
+}
+function webSetConn(text){ $('#webConn').textContent = text; }
+function webStart(){
+  webStop();
+  if (!settings.web) return;
+  if (!settings.webRoom) { settings.webRoom = newRoom(); save(); }
+  const run = ++web.run;
+  const since = web.lastId ? '?since=' + encodeURIComponent(web.lastId) : '';
+  webSetConn('Connecting…');
+  let es; try { es = new EventSource(NTFY + settings.webRoom + '/sse' + since); } catch { webSetConn('Could not connect'); return; }
+  web.es = es;
+  es.onopen = () => { if (run === web.run) { webSetConn('Listening for submissions'); web.sentOpen = null; webStatusSync(); } };
+  es.onmessage = e => {
+    if (run !== web.run) return;
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    if (d.event !== 'message') return;
+    web.lastId = d.id;
+    let m; try { m = JSON.parse(d.message); } catch { return; }
+    webReceive(m);
+  };
+  es.onerror = () => {
+    if (run !== web.run) return;
+    es.close(); webSetConn('Connection lost, retrying…');
+    web.retry = setTimeout(() => { if (run === web.run) webStart(); }, 5000);
+  };
+}
+function webStop(){
+  web.run++; clearTimeout(web.retry);
+  if (web.es) { web.es.close(); web.es = null; }
+  webSetConn('Not connected');
+}
+function webReceive(m){
+  if (!m || m.v !== 1 || typeof m.url !== 'string') return;
+  const name = String(m.name || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 25) || 'Anonymous';
+  const uid = 'web:' + String(m.uid || '').replace(/[^\w-]/g, '').slice(0, 32);
+  const link = parseLink(m.url.slice(0, 500));
+  if (!link) { log(`${name} (web): not a supported link`, 'no'); return; }
+  if (!settings.open) { log(`${name} (web): queue is closed`, 'no'); return; }
+  if (settings.webReview) {
+    const key = keyOf(link);
+    if (requests.some(r => r.key === key) || queue.some(q => q.key === key) || (current && current.key === key)) { log(`${name} (web): skipped, already waiting`, 'no'); return; }
+    if (requests.length >= 100) { log(`${name} (web): skipped, too many requests waiting`, 'no'); return; }
+    requests.push({...link, key, user:name, uid, title: defaultTitle(link), added: Date.now()});
+    saveReq(); render();
+    log(`${name} (web) sent ${PLATFORMS[link.platform].label} for review`, 'ok');
+  } else {
+    const why = addLink(link, name, {source:'Website', uid});
+    log(why ? `${name} (web): skipped, ${why}` : `${name} (web) added ${PLATFORMS[link.platform].label}`, why ? 'no' : 'ok');
+  }
+}
+function approve(key){
+  const r = requests.find(x => x.key === key); if (!r) return;
+  requests = requests.filter(x => x !== r); saveReq();
+  const {user, uid, title, added, key: _k, ...link} = r;
+  const why = addLink(link, user, {source:'Website', uid});
+  log(why ? `Couldn't add ${user}'s link: ${why}` : `Approved ${user}'s ${PLATFORMS[link.platform].label}`, why ? 'no' : 'ok');
+  render();
+}
+function renderRequests(){
+  $('#reqOff').hidden = settings.web; $('#reqOn').hidden = !settings.web || !requests.length;
+  $('#reqEmpty').hidden = !settings.web || requests.length > 0;
+  $('#reqList').innerHTML = requests.map((it, i) => rowHTML(it, i,
+    `<button class="icon" data-act="ok" title="Approve" aria-label="Approve"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"/></svg></button>
+     <a class="icon" href="${esc(it.url)}" target="_blank" rel="noopener" title="Preview in a new tab" aria-label="Preview in a new tab">${ICON.link}</a>
+     <button class="icon" data-act="no" title="Reject" aria-label="Reject">${ICON.x}</button>`)).join('');
+  const n = $('#nReq'); n.textContent = requests.length; n.classList.toggle('hot', requests.length > 0);
+}
+$('#reqList').addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const key = b.closest('.item').dataset.key;
+  if (b.dataset.act === 'ok') approve(key);
+  if (b.dataset.act === 'no') { requests = requests.filter(r => r.key !== key); saveReq(); render(); }
+});
+$('#approveAll').addEventListener('click', () => { for (const r of [...requests]) approve(r.key); });
+/* Tell the submit page whether the queue is taking links. */
+function webStatusSync(force){
+  if (!settings.web || !settings.webRoom || !web.es) return;
+  const open = !!settings.open;
+  if (!force && web.sentOpen === open) return;
+  web.sentOpen = open;
+  fetch(NTFY + settings.webRoom + '_status', {method:'POST', body: JSON.stringify({v:1, open, ch: settings.channel || yt.label || ''})}).catch(() => {});
+}
+window.addEventListener('pagehide', () => {
+  if (settings.web && settings.webRoom) try { navigator.sendBeacon(NTFY + settings.webRoom + '_status', JSON.stringify({v:1, open:false, offline:true})); } catch {}
+});
+function webUI(){
+  $('#setWeb').checked = settings.web;
+  $('#webBox').hidden = !settings.web;
+  $('#setWebReview').checked = settings.webReview;
+  if (settings.web && settings.webRoom) $('#webLink').value = webLink();
+  render();
+}
+$('#setWeb').addEventListener('change', e => {
+  settings.web = e.target.checked; save();
+  if (settings.web) webStart(); else { webStatusSync(true); fetch(NTFY + settings.webRoom + '_status', {method:'POST', body: JSON.stringify({v:1, open:false, off:true})}).catch(() => {}); webStop(); }
+  webUI();
+});
+$('#setWebReview').addEventListener('change', e => { settings.webReview = e.target.checked; save(); });
+$('#webNew').addEventListener('click', e => {
+  const b = e.currentTarget;
+  if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Click again to confirm'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'Make a new link'; }, 3000); return; }
+  delete b.dataset.armed; b.textContent = 'Make a new link';
+  if (settings.webRoom) fetch(NTFY + settings.webRoom + '_status', {method:'POST', body: JSON.stringify({v:1, open:false, off:true})}).catch(() => {});
+  settings.webRoom = newRoom(); web.lastId = ''; save(); webStart(); webUI();
+  log('Made a new submission link. The old one no longer works.', 'ok');
+});
+$('#webCopy').addEventListener('click', () => {
+  const i = $('#webLink'), b = $('#webCopy');
+  const done = () => { b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500); };
+  navigator.clipboard.writeText(i.value).then(done).catch(() => { i.select(); try { document.execCommand('copy'); done(); } catch {} });
+});
+$('#channel').addEventListener('change', () => { if (settings.web) setTimeout(webUI, 0); });
+
 /* ---------- UI wiring ---------- */
 $('#connectForm').addEventListener('submit', e => { e.preventDefault(); connect($('#channel').value); });
 $('#ytForm').addEventListener('submit', e => { e.preventDefault(); if (yt.chatId) { ytStop(); log('Disconnected from YouTube'); } else ytConnect($('#ytTarget').value); });
@@ -815,6 +970,7 @@ $('#channel').value = settings.channel;
 renderPlayer(); render();
 log('Ready. Enter a channel name and press Connect.');
 if (settings.channel) connect(settings.channel);
+webUI(); if (settings.web) webStart();
 
 window.__cq = {parseLink, findLinks};
 })();

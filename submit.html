@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Send a Video</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one centred card, same broadcast-desk look as the queue page. */
+:root{
+  --bg:#111318; --panel:#181b22; --raised:#20242d; --line:#2b303b;
+  --fg:#ebe7df; --muted:#8e93a2; --accent:#f2b544; --accent-ink:#1a1405;
+  --live:#e5484d; --ok:#4cc38a;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{min-height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 var(--body);padding:48px 16px;display:flex;justify-content:center}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.card{width:100%;max-width:520px;display:flex;flex-direction:column;gap:22px}
+.eyebrow{display:flex;align-items:center;gap:10px;font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.lamp{font:500 11px/1 var(--mono);letter-spacing:.08em;padding:5px 8px;border-radius:999px;background:#3a3f4b;color:var(--muted)}
+.lamp.open{background:var(--live);color:#fff;box-shadow:0 0 12px rgba(229,72,77,.5)}
+h1{font:700 clamp(28px,6vw,38px)/1.1 var(--display);letter-spacing:-.01em;margin:0;text-wrap:balance}
+h1 span{color:var(--accent)}
+.lede{margin:0;color:var(--muted)}
+form{display:flex;flex-direction:column;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+label{display:flex;flex-direction:column;gap:6px;font-weight:500;font-size:14px}
+label small{font-weight:400;color:var(--muted)}
+.field{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:11px 12px;width:100%;min-width:0}
+.field:focus{border-color:var(--accent);outline:none}
+.btn{background:var(--accent);border:1px solid var(--accent);color:var(--accent-ink);border-radius:8px;padding:11px 16px;font-weight:600;cursor:pointer}
+.btn:disabled{opacity:.55;cursor:default}
+.msg{margin:0;font-size:14px;min-height:1.5em}
+.msg.ok{color:var(--ok)} .msg.no{color:#f0a6a8}
+.sites{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:500 11px/1 var(--mono);letter-spacing:.04em;padding:6px 8px;border-radius:5px;border:1px solid var(--line);color:var(--muted)}
+.foot{font-size:13px;color:var(--muted);margin:0}
+.bad{background:#231e12;border:1px solid #5a4a22;color:#efd9a3;border-radius:10px;padding:14px 16px}
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="eyebrow"><span class="lamp" id="lamp">…</span><span id="statusText">Checking the queue</span></div>
+  <div>
+    <h1 id="heading">Send a video to the queue</h1>
+    <p class="lede" style="margin-top:8px">Paste a link and it goes straight to the stream's video queue. No account needed.</p>
+  </div>
+
+  <div class="bad" id="badLink" hidden>This link is missing its room code. Ask the streamer for the full submission link.</div>
+
+  <form id="form" novalidate>
+    <label>Video link
+      <input class="field" id="url" type="url" inputmode="url" placeholder="https://www.tiktok.com/@name/video/…" autocomplete="off" spellcheck="false" required>
+    </label>
+    <label>Your name <small>Optional. Leave blank to send anonymously.</small>
+      <input class="field" id="name" maxlength="25" placeholder="Anonymous" autocomplete="nickname">
+    </label>
+    <button class="btn" id="send" type="submit">Send to queue</button>
+    <p class="msg" id="msg" role="status" aria-live="polite"></p>
+  </form>
+
+  <div>
+    <p class="foot" style="margin-bottom:8px">Works with</p>
+    <div class="sites"><span class="chip">Twitch clips</span><span class="chip">YouTube</span><span class="chip">TikTok</span><span class="chip">Instagram reels</span><span class="chip">X / Twitter</span><span class="chip">Streamable</span></div>
+  </div>
+  <p class="foot">The streamer may review links before they play. Please keep it to one link at a time.</p>
+</main>
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const store = { get(k, d){ try { return localStorage.getItem('cqs:'+k) ?? d; } catch { return d; } }, set(k, v){ try { localStorage.setItem('cqs:'+k, v); } catch {} } };
+const NTFY = 'https://ntfy.sh/';
+const COOLDOWN = 20;
+const q = new URLSearchParams(location.search);
+const room = (q.get('room') || '').replace(/[^\w-]/g, '').slice(0, 64);
+const who = (q.get('for') || '').replace(/[^\w .-]/g, '').slice(0, 40);
+if (who) { $('#heading').innerHTML = 'Send a video to <span></span>'; $('#heading span').textContent = who; document.title = 'Send a Video to ' + who; }
+
+function parseTime(t){
+  if (!t) return 0;
+  if (/^\d+$/.test(t)) return +t;
+  const m = t.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+  return m ? (+m[1]||0)*3600 + (+m[2]||0)*60 + (+m[3]||0) : 0;
+}
+function parseLink(raw){
+  let s = raw.trim().replace(/[)\]}>.,!?'"]+$/, '');
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+  let u; try { u = new URL(s); } catch { return null; }
+  const host = u.hostname.toLowerCase().replace(/^(www|m|mobile)\./, '');
+  const p = u.pathname.split('/').filter(Boolean);
+  const url = u.href;
+
+  const yt = (id, shorts) => /^[\w-]{11}$/.test(id) ? {platform:'youtube', id, url, shape: shorts ? 'tall' : 'wide', start: parseTime(u.searchParams.get('t') || u.searchParams.get('start'))} : null;
+  if (host === 'youtube.com' || host === 'music.youtube.com') {
+    if (p[0] === 'watch') return yt(u.searchParams.get('v') || '');
+    if (['shorts','live','embed'].includes(p[0]) && p[1]) return yt(p[1], p[0] === 'shorts');
+    return null;
+  }
+  if (host === 'youtu.be' && p[0]) return yt(p[0]);
+
+  if (host === 'clips.twitch.tv' && p[0] && p[0] !== 'embed') return {platform:'twitch', id:p[0], url, shape:'wide'};
+  if (host === 'twitch.tv' && p[1] === 'clip' && p[2]) return {platform:'twitch', id:p[2], url, shape:'wide', channel:p[0]};
+
+  if (host === 'vm.tiktok.com' || host === 'vt.tiktok.com' || (host === 'tiktok.com' && p[0] === 't'))
+    return {platform:'tiktok', id:null, url, shape:'tall', shortLink:true};
+  if (host === 'tiktok.com') {
+    const id = p.find(x => /^\d{15,}$/.test(x));
+    if (id) return {platform:'tiktok', id, url, shape:'tall', author: (p[0]||'').startsWith('@') ? p[0] : ''};
+    return null;
+  }
+
+  if (host === 'instagram.com') {
+    const i = p.findIndex(x => ['reel','reels','p','tv'].includes(x));
+    if (i >= 0 && p[i+1]) return {platform:'instagram', id:p[i+1], kind: p[i] === 'p' ? 'p' : 'reel', url, shape:'tall'};
+    return null;
+  }
+
+  if (['twitter.com','x.com','fxtwitter.com','vxtwitter.com','fixupx.com','fixvx.com','fxtwitter.com'].includes(host)) {
+    const i = p.indexOf('status');
+    if (i >= 0 && /^\d+$/.test(p[i+1]||'')) return {platform:'twitter', id:p[i+1], url, shape:'tweet', author: i > 0 && p[0] !== 'i' ? '@'+p[0] : ''};
+    return null;
+  }
+
+  if (host === 'streamable.com' && p[0]) {
+    const id = p[0] === 'e' || p[0] === 'o' ? p[1] : p[0];
+    if (id) return {platform:'streamable', id, url, shape:'wide'};
+  }
+  return null;
+}
+
+
+let uid = store.get('uid', '');
+if (!uid) { uid = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join(''); store.set('uid', uid); }
+$('#name').value = store.get('name', '');
+
+function setStatus(state, text){ const l = $('#lamp'); l.className = 'lamp' + (state === 'open' ? ' open' : ''); l.textContent = state === 'open' ? 'OPEN' : state === 'closed' ? 'CLOSED' : '…'; $('#statusText').textContent = text; }
+let isOpen = null;
+async function checkStatus(){
+  try {
+    const r = await fetch(NTFY + room + '_status/json?poll=1&since=12h');
+    const lines = (await r.text()).trim().split('\n').filter(Boolean);
+    let last = null;
+    for (const ln of lines) { try { const d = JSON.parse(ln); if (d.event === 'message') last = JSON.parse(d.message); } catch {} }
+    if (!last) { isOpen = null; setStatus('', 'Queue status unknown'); return; }
+    isOpen = !!last.open;
+    if (last.open) setStatus('open', 'Taking links now');
+    else if (last.offline || last.off) setStatus('closed', "The queue isn't running right now");
+    else setStatus('closed', 'The queue is closed for now');
+  } catch { setStatus('', 'Queue status unknown'); }
+}
+
+function say(text, cls){ const m = $('#msg'); m.textContent = text; m.className = 'msg ' + (cls || ''); }
+let cool = 0, coolTimer = null;
+function startCooldown(){
+  cool = COOLDOWN; const b = $('#send');
+  const tick = () => { if (cool <= 0) { b.disabled = false; b.textContent = 'Send to queue'; return; } b.disabled = true; b.textContent = `Send again in ${cool}s`; cool--; coolTimer = setTimeout(tick, 1000); };
+  tick();
+}
+
+$('#form').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (cool > 0) return;
+  const raw = $('#url').value.trim();
+  if (!raw) { say('Paste a video link first.', 'no'); $('#url').focus(); return; }
+  const link = parseLink(raw);
+  if (!link) { say("That link isn't from a supported site. Check the list below.", 'no'); $('#url').select(); return; }
+  if (link.shortLink) { say('Short TikTok links (vm.tiktok.com) can’t be played. Open it in your browser and copy the full tiktok.com/@name/video/… link instead.', 'no'); return; }
+  if (isOpen === false) { say("The queue isn't taking links right now. Try again later.", 'no'); return; }
+  const name = $('#name').value.trim().slice(0, 25);
+  store.set('name', name);
+  const b = $('#send'); b.disabled = true; b.textContent = 'Sending…';
+  try {
+    const r = await fetch(NTFY + room, {method:'POST', body: JSON.stringify({v:1, url: link.url, name, uid})});
+    if (r.status === 429) { say('Too many links sent from your network. Wait a few minutes and try again.', 'no'); b.disabled = false; b.textContent = 'Send to queue'; return; }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    say(`Sent${name ? '' : ' anonymously'}. Thanks! It'll show up for the streamer in a moment.`, 'ok');
+    $('#url').value = '';
+    startCooldown();
+  } catch {
+    say("Couldn't send it. Check your connection and try again.", 'no');
+    b.disabled = false; b.textContent = 'Send to queue';
+  }
+});
+
+if (!room) { $('#badLink').hidden = false; $('#form').hidden = true; setStatus('closed', 'Link incomplete'); }
+else { checkStatus(); setInterval(checkStatus, 60000); }
+})();
+</script>
+</body>
+</html>

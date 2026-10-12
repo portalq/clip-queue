@@ -23,6 +23,18 @@ The free allowance resets at 8am UK time. Checking every 10 seconds covers about
 
 YouTube moderators and the channel owner can use the `!cq` commands. Channel members count as "subs" for the "who can add links" setting.
 
+## Website submissions
+
+Viewers can send links from a web page instead of posting them in chat, with or without a name.
+
+1. On the queue page, open **Settings → Website submissions** and tick **Let viewers send links from a web page**.
+2. Copy the link it shows and share it (a chat command, panel or pinned message).
+3. Links sent from the page wait in the **Requests** tab until you approve them. You can turn that review step off in the same settings.
+
+The submit page shows viewers whether the queue is open. Each viewer can send one link every 20 seconds, and the per-person limit in Settings still applies. If the link gets spammed, press **Make a new link** and the old one stops working.
+
+Submissions travel through [ntfy.sh](https://ntfy.sh), a free public relay, so the queue page needs to be open to receive them. Links sent while it's closed are not added later.
+
 ## Mod commands
 
 | Command | What it does |
