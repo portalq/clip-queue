@@ -880,6 +880,8 @@ function webReceive(m){
   if (settings.webReview) {
     const key = keyOf(link);
     if (requests.some(r => r.key === key) || queue.some(q => q.key === key) || (current && current.key === key)) { log(`${name} (web): skipped, already waiting`, 'no'); return; }
+    if (!settings.allowRepeats && history.some(h => h.key === key)) { log(`${name} (web): skipped, already played`, 'no'); return; }
+    if (!settings.platforms[link.platform]) { log(`${name} (web): skipped, ${PLATFORMS[link.platform].label} is turned off`, 'no'); return; }
     if (requests.length >= 100) { log(`${name} (web): skipped, too many requests waiting`, 'no'); return; }
     const req = {...link, key, user:name, uid, title: defaultTitle(link), added: Date.now()};
     requests.push(req);
