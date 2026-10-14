@@ -3,6 +3,6 @@
 // Both values are public by design (Firebase web config); access is controlled by firestore.rules.
 // Leave them empty to use the ntfy.sh relay instead, which keeps links for 12 hours.
 window.CQ_CONFIG = {
-  firebaseProjectId: '',
-  firebaseApiKey: ''
+  firebaseProjectId: 'clip-queue-submissions',
+  firebaseApiKey: 'AIzaSyCOpEAeaiIC_PM4zdxRu2fTSmaT6qiTs1U'
 };
