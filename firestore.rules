@@ -1,0 +1,22 @@
+rules_version = '2';
+// Paste this into Firebase console > Firestore Database > Rules, then click Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Website submissions: anyone with the room link can add one; nobody can edit or delete through the site.
+    match /rooms/{room}/subs/{sub} {
+      allow read: if room.size() >= 10;
+      allow create: if room.size() >= 10
+        && request.resource.data.keys().hasOnly(['url', 'name', 'uid', 't', 'exp'])
+        && request.resource.data.url is string && request.resource.data.url.size() > 8 && request.resource.data.url.size() <= 500
+        && request.resource.data.url.matches('https://.*')
+        && request.resource.data.name is string && request.resource.data.name.size() <= 25
+        && request.resource.data.uid is string && request.resource.data.uid.size() <= 32
+        && request.resource.data.t is timestamp
+        && request.resource.data.t > request.time - duration.value(5, 'm')
+        && request.resource.data.t < request.time + duration.value(5, 'm')
+        && request.resource.data.exp is timestamp
+        && request.resource.data.exp < request.time + duration.value(31, 'd');
+      allow update, delete: if false;
+    }
+  }
+}

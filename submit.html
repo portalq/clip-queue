@@ -74,6 +74,7 @@ label small{font-weight:400;color:var(--muted)}
   </div>
   <p class="foot">The streamer may review links before they play. Please keep it to one link at a time.</p>
 </main>
+<script src="config.js"></script>
 <script>
 (() => {
 'use strict';
@@ -81,6 +82,15 @@ const $ = s => document.querySelector(s);
 const store = { get(k, d){ try { return localStorage.getItem('cqs:'+k) ?? d; } catch { return d; } }, set(k, v){ try { localStorage.setItem('cqs:'+k, v); } catch {} } };
 const NTFY = 'https://ntfy.sh/';
 const COOLDOWN = 20;
+const FB = (window.CQ_CONFIG && CQ_CONFIG.firebaseProjectId && CQ_CONFIG.firebaseApiKey) ? CQ_CONFIG : null;
+const KEEP = FB ? '30 days' : '12 hours';
+async function sendLink(url, name){
+  if (!FB) return fetch(NTFY + room, {method:'POST', body: JSON.stringify({v:1, url, name, uid})});
+  const now = new Date(), exp = new Date(now.getTime() + 30 * 864e5);
+  return fetch(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(FB.firebaseProjectId)}/databases/(default)/documents/rooms/${room}/subs?key=${encodeURIComponent(FB.firebaseApiKey)}`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({fields:{url:{stringValue:url}, name:{stringValue:name}, uid:{stringValue:uid}, t:{timestampValue:now.toISOString()}, exp:{timestampValue:exp.toISOString()}}})});
+}
 const q = new URLSearchParams(location.search);
 const room = (q.get('room') || '').replace(/[^\w-]/g, '').slice(0, 64);
 const who = (q.get('for') || '').replace(/[^\w .-]/g, '').slice(0, 40);
@@ -182,11 +192,11 @@ $('#form').addEventListener('submit', async e => {
   store.set('name', name);
   const b = $('#send'); b.disabled = true; b.textContent = 'Sending…';
   try {
-    const r = await fetch(NTFY + room, {method:'POST', body: JSON.stringify({v:1, url: link.url, name, uid})});
+    const r = await sendLink(link.url, name);
     if (r.status === 429) { say('Too many links sent from your network. Wait a few minutes and try again.', 'no'); b.disabled = false; b.textContent = 'Send to queue'; return; }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     say(isOpen === 'away'
-      ? `Sent${name ? '' : ' anonymously'}. The streamer is offline, so it'll be waiting for them next stream (links are kept for 12 hours).`
+      ? `Sent${name ? '' : ' anonymously'}. The streamer is offline, so it'll be waiting for them next stream (links are kept for ${KEEP}).`
       : `Sent${name ? '' : ' anonymously'}. Thanks! It'll show up for the streamer in a moment.`, 'ok');
     $('#url').value = '';
     startCooldown();

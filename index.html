@@ -243,7 +243,7 @@ button{cursor:pointer}
               <label class="chk" style="margin-top:6px"><input type="checkbox" id="setWebReview"> Review website links before they join the queue</label>
               <div class="inline" style="margin-top:4px"><span id="webConn" class="hint" style="margin:0">Not connected</span><span class="spacer"></span><button class="btn small" id="webNew" type="button">Make a new link</button></div>
               <p style="margin-top:6px">A new link stops the old one working, which is useful if it gets spammed.</p>
-              <p style="margin-top:6px">Viewers can send links while this page is closed. Next time you open it, anything sent in the last 12 hours lands in Requests for you to approve.</p>
+              <p style="margin-top:6px" id="webAwayNote">Viewers can send links while this page is closed. Next time you open it, anything they sent lands in Requests for you to approve.</p>
             </div>
           </div>
           <div>
@@ -278,6 +278,7 @@ button{cursor:pointer}
   </main>
 </div>
 
+<script src="config.js"></script>
 <script>
 (() => {
 'use strict';
@@ -845,10 +846,65 @@ function webLink(){
   return u.href;
 }
 function webSetConn(text){ $('#webConn').textContent = text; }
+function noteCaughtUp(){
+  clearTimeout(web.caughtTimer);
+  web.caughtTimer = setTimeout(() => { if (web.caughtUp) log(`${web.caughtUp} link${web.caughtUp === 1 ? ' was' : 's were'} sent while you were away. They're in Requests.`, 'ok'); web.caughtUp = 0; }, 1500);
+}
+/* ---- Firestore storage (used when config.js has a Firebase project) ---- */
+const FB = (window.CQ_CONFIG && CQ_CONFIG.firebaseProjectId && CQ_CONFIG.firebaseApiKey) ? CQ_CONFIG : null;
+const KEEP_DAYS = FB ? 30 : 0.5;
+const fbDocs = () => `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(FB.firebaseProjectId)}/databases/(default)/documents`;
+function fbExplain(status, j){
+  const msg = (j && j.error && j.error.message) || ('HTTP ' + status);
+  if (status === 403) return "The database refused access. Check the Firestore rules were published.";
+  if (status === 404) return "The database wasn't found. Check Firestore was created in the Firebase project.";
+  if (status === 400 && /API key/i.test(msg)) return 'The Firebase API key in config.js was rejected.';
+  return msg;
+}
+function webStartFB(run){
+  if (!webSeen.tIso) { webSeen.tIso = new Date().toISOString(); saveSeen(); }
+  const oldest = new Date(Date.now() - KEEP_DAYS * 864e5).toISOString();
+  if (webSeen.tIso < oldest) webSeen.tIso = oldest;
+  let warned = false;
+  const poll = async () => {
+    if (run !== web.run) return;
+    try {
+      const r = await fetch(`${fbDocs()}/rooms/${settings.webRoom}:runQuery?key=${encodeURIComponent(FB.firebaseApiKey)}`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({structuredQuery:{
+        from:[{collectionId:'subs'}],
+        where:{fieldFilter:{field:{fieldPath:'t'}, op:'GREATER_THAN_OR_EQUAL', value:{timestampValue: webSeen.tIso}}},
+        orderBy:[{field:{fieldPath:'t'}, direction:'ASCENDING'}], limit:100}})});
+      const j = await r.json().catch(() => null);
+      if (run !== web.run) return;
+      if (!r.ok) throw Object.assign(new Error(fbExplain(r.status, Array.isArray(j) ? j[0] : j)), {fatal: r.status === 403 || r.status === 404 || r.status === 400});
+      if (!web.es) { web.es = {close(){}}; web.sentOpen = null; webStatusSync(); }
+      webSetConn(`Listening for submissions (kept for ${KEEP_DAYS} days)`);
+      warned = false;
+      for (const row of j || []) {
+        const d = row.document; if (!d) continue;
+        const id = d.name.split('/').pop();
+        if (webSeen.ids.includes(id)) continue;
+        const f = d.fields || {}, tIso = f.t && f.t.timestampValue || d.createTime;
+        webSeen.ids = [...webSeen.ids, id].slice(-200);
+        if (tIso > webSeen.tIso) webSeen.tIso = tIso;
+        saveSeen();
+        const offline = Date.parse(tIso) / 1000 < web.connectedAt - 5;
+        webReceive({v:1, url: f.url && f.url.stringValue, name: f.name && f.name.stringValue, uid: f.uid && f.uid.stringValue}, offline);
+        if (offline) noteCaughtUp();
+      }
+    } catch (e) {
+      if (run !== web.run) return;
+      webSetConn('Connection problem, retrying…');
+      if (!warned) { log('Website submissions: ' + e.message, 'no'); warned = true; }
+    }
+    web.retry = setTimeout(poll, 10000);
+  };
+  poll();
+}
 function webStart(){
   webStop();
   if (!settings.web) return;
   if (!settings.webRoom) { settings.webRoom = newRoom(); save(); }
+  if (FB) { const run = ++web.run; web.connectedAt = Math.floor(Date.now() / 1000); web.caughtUp = 0; webSetConn('Connecting…'); webStartFB(run); return; }
   if (!webSeen.time) { webSeen.time = Math.floor(Date.now() / 1000); saveSeen(); }
   const run = ++web.run;
   const since = webSeen.time ? '?since=' + Math.max(0, webSeen.time - 1) : '';
@@ -867,7 +923,7 @@ function webStart(){
     let m; try { m = JSON.parse(d.message); } catch { return; }
     const offline = (+d.time || 0) < web.connectedAt - 5;
     webReceive(m, offline);
-    if (offline) { clearTimeout(web.caughtTimer); web.caughtTimer = setTimeout(() => { if (web.caughtUp) log(`${web.caughtUp} link${web.caughtUp === 1 ? ' was' : 's were'} sent while you were away. They're in Requests.`, 'ok'); web.caughtUp = 0; }, 1500); }
+    if (offline) noteCaughtUp();
   };
   es.onerror = () => {
     if (run !== web.run) return;
@@ -940,6 +996,7 @@ window.addEventListener('pagehide', () => {
   if (settings.web && settings.webRoom) try { navigator.sendBeacon(NTFY + settings.webRoom + '_status', JSON.stringify({v:1, open:false, offline:true, taking: !!settings.open, ch: settings.channel || yt.label || ''})); } catch {}
 });
 function webUI(){
+  $('#webAwayNote').textContent = `Viewers can send links while this page is closed. Next time you open it, anything sent in the last ${FB ? '30 days' : '12 hours'} lands in Requests for you to approve.`;
   $('#setWeb').checked = settings.web;
   $('#webBox').hidden = !settings.web;
   $('#setWebReview').checked = settings.webReview;
@@ -957,7 +1014,7 @@ $('#webNew').addEventListener('click', e => {
   if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Click again to confirm'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'Make a new link'; }, 3000); return; }
   delete b.dataset.armed; b.textContent = 'Make a new link';
   if (settings.webRoom) fetch(NTFY + settings.webRoom + '_status', {method:'POST', body: JSON.stringify({v:1, open:false, off:true})}).catch(() => {});
-  settings.webRoom = newRoom(); webSeen = {time: Math.floor(Date.now() / 1000), ids: []}; saveSeen(); save(); webStart(); webUI();
+  settings.webRoom = newRoom(); webSeen = {time: Math.floor(Date.now() / 1000), tIso: new Date().toISOString(), ids: []}; saveSeen(); save(); webStart(); webUI();
   log('Made a new submission link. The old one no longer works.', 'ok');
 });
 $('#webCopy').addEventListener('click', () => {
