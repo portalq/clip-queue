@@ -218,7 +218,9 @@ async function loadState(){
     const r = await fetch(fbUrl(`rooms/${room}/state/main`));
     if (r.status === 404) state = null;
     else if (r.ok) { const j = await r.json(); state = JSON.parse(j.fields.json.stringValue); }
-    if (state && !online()) await loadAway(); else { decided = new Map(); fresh = []; }
+    if (state && Date.now() - (state.ts || 0) < 150 * 1000) state.closed = await closedSince(state.ts);
+    if (state) await loadAway(); else { decided = new Map(); fresh = []; }
+    watchWeb();
   } catch {}
   polling = false;
   if (want && state && state.open === want.open) want = null;
@@ -227,6 +229,7 @@ async function loadState(){
 }
 /* While the queue page is closed: collect decisions already made, and website links it hasn't picked up yet. */
 async function loadAway(){
+  if (online()) { decided = new Map(); fresh = []; return; }
   const iso = new Date((state.ts || 0) - 2000).toISOString();
   const acts = await since(`rooms/${room}`, 'acts', iso, 300);
   const list = acts.map(d => { try { return JSON.parse(d.fields.body.stringValue); } catch { return null; } }).filter(Boolean);
@@ -248,7 +251,26 @@ async function loadAway(){
     }
   }
 }
-const online = () => state && Date.now() - (state.ts || 0) < 5 * 60 * 1000;
+/* The queue page sends a "closed" note through ntfy.sh as it closes (it can't update the database at that moment). */
+async function closedSince(ts){
+  try {
+    const r = await fetch(NTFY + room + '_state/json?poll=1&since=15m');
+    const lines = (await r.text()).trim().split('\n').filter(Boolean);
+    return lines.some(l => { try { const d = JSON.parse(l); return d.event === 'message' && d.message === 'closed' && d.time * 1000 > ts - 3000; } catch { return false; } });
+  } catch { return false; }
+}
+/* The queue page checks in every minute and says when it closes. */
+const online = () => !!(state && !state.closed && Date.now() - (state.ts || 0) < 150 * 1000);
+/* Refresh as soon as a viewer sends a link from the website. */
+let webWatched = '';
+function watchWeb(){
+  if (!state || !state.webRoom || state.webRoom === webWatched) return;
+  webWatched = state.webRoom;
+  try {
+    const es = new EventSource(NTFY + state.webRoom + '_ping/sse');
+    es.onmessage = e => { try { if (JSON.parse(e.data).event === 'message') loadState(); } catch {} };
+  } catch {}
+}
 
 /* ---------- actions ---------- */
 async function send(body){

@@ -1109,14 +1109,21 @@ function applyAct(a, away){
   }
   return null;
 }
+function modState(){
+  const slim = it => it ? {key: it.key, title: it.title, user: it.user, source: it.source || '', platform: it.platform, url: it.url, thumb: it.thumb || '', id: it.id || '', kind: it.kind || ''} : null;
+  return {v:1, ch: settings.channel || '', open: !!settings.open, webRoom: settings.web && FB ? settings.webRoom : '', now: slim(current),
+    queue: queue.slice(0, 100).map(slim), requests: requests.slice(0, 200).map(slim)};
+}
+/* Tell the admin page straight away when this page closes, so it switches to saving decisions for later. */
+window.addEventListener('pagehide', () => {
+  if (!settings.modOn || !FB || !settings.modRoom) return;
+  try { navigator.sendBeacon(NTFY + settings.modRoom + '_state', 'closed'); } catch {}
+});
 function publishState(force = false){
   if (!settings.modOn || !FB || !settings.modRoom) return;
   clearTimeout(mod.pubTimer);
   mod.pubTimer = setTimeout(async () => {
-    const slim = it => it ? {key: it.key, title: it.title, user: it.user, source: it.source || '', platform: it.platform, url: it.url, thumb: it.thumb || '', id: it.id || '', kind: it.kind || ''} : null;
-    const st = {v:1, ch: settings.channel || '', open: !!settings.open, webRoom: settings.web && FB ? settings.webRoom : '', now: slim(current),
-      queue: queue.slice(0, 100).map(slim), requests: requests.slice(0, 200).map(slim),
-      };
+    const st = modState();
     const sig = JSON.stringify(st);
     if (!force && sig === mod.last) return;
     st.ts = Date.now();
@@ -1134,7 +1141,7 @@ function publishState(force = false){
     }
   }, force ? 0 : 600);
 }
-setInterval(() => publishState(true), 2 * 60 * 1000);
+setInterval(() => publishState(true), 60 * 1000);
 function modStart(){
   modStop();
   if (!settings.modOn) return;
