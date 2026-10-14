@@ -23,6 +23,10 @@ The free allowance resets at 8am UK time. Checking every 10 seconds covers about
 
 YouTube moderators and the channel owner can use the `!cq` commands. Channel members count as "subs" for the "who can add links" setting.
 
+## Reviewing links
+
+By default, links from Twitch and YouTube chat go to the **Requests** tab first. Approve them there to add them to the queue, or reject them. Switch this off under **Settings → Who can add links → Review chat links before they join the queue** to send chat links straight to the queue.
+
 ## Website submissions
 
 Viewers can send links from a web page instead of posting them in chat, with or without a name.

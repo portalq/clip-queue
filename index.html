@@ -195,7 +195,7 @@ button{cursor:pointer}
       </div>
 
       <div class="pane" data-pane="requests" hidden>
-        <p class="hint" id="reqOff">Website submissions are off. Turn them on under Settings to get a link viewers can use to send videos without posting in chat.</p>
+        <p class="hint" id="reqOff">Links aren't being held for review. Turn on reviewing chat links or website submissions under Settings.</p>
         <div id="reqOn" hidden>
           <div class="row-end"><span class="hint" id="reqHint">Links sent from the website wait here until you approve them.</span>
             <button class="btn small" id="approveAll" type="button">Approve all</button></div>
@@ -217,6 +217,8 @@ button{cursor:pointer}
               <option value="subs">Subs, VIPs and mods</option>
               <option value="mods">Mods only</option>
             </select>
+            <label class="chk" style="margin-top:6px"><input type="checkbox" id="setReviewChat"> Review chat links before they join the queue</label>
+            <p>Links from Twitch and YouTube chat wait in Requests until you approve them.</p>
           </div>
           <div>
             <h3>Sites</h3>
@@ -298,7 +300,7 @@ const PLATFORMS = {
   streamable:{label:'Streamable',       chip:'STRM'}
 };
 
-const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'', web:false, webReview:true, webRoom:'',
+const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'', web:false, webReview:true, webRoom:'', reviewChat:true,
   platforms:Object.fromEntries(Object.keys(PLATFORMS).map(k => [k, true]))};
 const settings = Object.assign({}, defaults, store.get('settings', {}));
 settings.platforms = Object.assign({}, defaults.platforms, settings.platforms);
@@ -691,6 +693,11 @@ function handleChat({user, text, isMod, isSubLike, source}){
   if (settings.who === 'mods' && !isMod) { log(`${user}${tag}: only mods can add links`, 'no'); return; }
   if (settings.who === 'subs' && !isSubLike) { log(`${user}${tag}: only subs, members and mods can add links`, 'no'); return; }
   for (const l of links) {
+    if (settings.reviewChat) {
+      const why = toRequests(l, user, {source});
+      log(why ? `${user}${tag}: skipped, ${why}` : `${user}${tag} sent ${PLATFORMS[l.platform].label} for review`, why ? 'no' : 'ok');
+      continue;
+    }
     const why = addLink(l, user, {source});
     log(why ? `${user}${tag}: skipped, ${why}` : `${user}${tag} added ${PLATFORMS[l.platform].label}`, why ? 'no' : 'ok');
   }
@@ -957,14 +964,8 @@ function webReceive(m, offline = false){
   if (!link) { log(`${name} (web): not a supported link`, 'no'); return; }
   if (!offline && !settings.open) { log(`${name} (web): queue is closed`, 'no'); return; }
   if (settings.webReview || offline) {
-    const key = keyOf(link);
-    if (requests.some(r => r.key === key) || queue.some(q => q.key === key) || (current && current.key === key)) { log(`${name} (web): skipped, already waiting`, 'no'); return; }
-    if (!settings.allowRepeats && history.some(h => h.key === key)) { log(`${name} (web): skipped, already played`, 'no'); return; }
-    if (!settings.platforms[link.platform]) { log(`${name} (web): skipped, ${PLATFORMS[link.platform].label} is turned off`, 'no'); return; }
-    if (requests.length >= 100) { log(`${name} (web): skipped, too many requests waiting`, 'no'); return; }
-    const req = {...link, key, user:name, uid, title: defaultTitle(link), added: Date.now()};
-    requests.push(req);
-    saveReq(); render(); fetchMeta(req);
+    const why = toRequests(link, name, {uid, source:'Website'});
+    if (why) { log(`${name} (web): skipped, ${why}`, 'no'); return; }
     if (offline) { web.caughtUp++; return; }
     log(`${name} (web) sent ${PLATFORMS[link.platform].label} for review`, 'ok');
   } else {
@@ -972,17 +973,32 @@ function webReceive(m, offline = false){
     log(why ? `${name} (web): skipped, ${why}` : `${name} (web) added ${PLATFORMS[link.platform].label}`, why ? 'no' : 'ok');
   }
 }
+/* Put a link in Requests for the streamer to approve. Returns a reason if it was skipped. */
+function toRequests(link, user, {uid = '', source = ''} = {}){
+  const key = keyOf(link);
+  if (requests.some(r => r.key === key)) return 'already waiting for review';
+  if (queue.some(q => q.key === key) || (current && current.key === key)) return 'already in the queue';
+  if (!settings.allowRepeats && history.some(h => h.key === key)) return 'already played';
+  if (!settings.platforms[link.platform]) return `${PLATFORMS[link.platform].label} is turned off`;
+  if (requests.length >= 200) return 'too many requests waiting';
+  const req = {...link, key, user, uid, source, title: defaultTitle(link), added: Date.now()};
+  requests.push(req);
+  saveReq(); render(); fetchMeta(req);
+  return null;
+}
 function approve(key){
   const r = requests.find(x => x.key === key); if (!r) return;
   requests = requests.filter(x => x !== r); saveReq();
-  const {user, uid, title, thumb, added, key: _k, ...link} = r;
-  const why = addLink({...link, title, thumb}, user, {source:'Website', uid});
+  const {user, uid, title, thumb, added, source, key: _k, ...link} = r;
+  const why = addLink({...link, title, thumb}, user, {source: source || 'Website', uid});
   log(why ? `Couldn't add ${user}'s link: ${why}` : `Approved ${user}'s ${PLATFORMS[link.platform].label}`, why ? 'no' : 'ok');
   render();
 }
 function renderRequests(){
-  $('#reqOff').hidden = settings.web; $('#reqOn').hidden = !settings.web || !requests.length;
-  $('#reqEmpty').hidden = !settings.web || requests.length > 0;
+  const reviewing = settings.reviewChat || settings.web;
+  $('#reqOff').hidden = reviewing; $('#reqOn').hidden = !requests.length;
+  $('#reqEmpty').hidden = !reviewing || requests.length > 0;
+  $('#reqHint').textContent = settings.reviewChat ? 'Links from chat and the website wait here until you approve them.' : 'Links sent from the website wait here until you approve them.';
   $('#reqList').innerHTML = requests.map((it, i) => rowHTML(it, i,
     `<button class="icon" data-act="ok" title="Approve" aria-label="Approve"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"/></svg></button>
      <a class="icon" href="${esc(it.url)}" target="_blank" rel="noopener" title="Preview in a new tab" aria-label="Preview in a new tab">${ICON.link}</a>
@@ -1078,6 +1094,8 @@ $('#setAutoYT').checked = settings.autoNextYT;
 $('#setAutoYT').addEventListener('change', e => { settings.autoNextYT = e.target.checked; save(); });
 $('#setIgCrop').checked = settings.igCrop;
 $('#setIgCrop').addEventListener('change', e => { settings.igCrop = e.target.checked; save(); if (current && current.platform === 'instagram') renderPlayer(); });
+$('#setReviewChat').checked = settings.reviewChat;
+$('#setReviewChat').addEventListener('change', e => { settings.reviewChat = e.target.checked; save(); render(); });
 $('#setYtKey').value = settings.ytKey;
 $('#setYtKey').addEventListener('change', e => { settings.ytKey = e.target.value.trim(); save(); });
 $('#setYtPoll').value = String(settings.ytPoll);
