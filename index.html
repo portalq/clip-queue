@@ -872,6 +872,7 @@ function noteCaughtUp(){
 /* ---- Firestore storage (used when config.js has a Firebase project) ---- */
 const FB = (window.CQ_CONFIG && CQ_CONFIG.firebaseProjectId && CQ_CONFIG.firebaseApiKey) ? CQ_CONFIG : null;
 const KEEP_DAYS = FB ? 190 : 0.5;
+const lookback = iso => new Date(Date.parse(iso) - 10 * 60e3).toISOString();
 const fbDocs = () => `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(FB.firebaseProjectId)}/databases/(default)/documents`;
 function fbExplain(status, j){
   const msg = (j && j.error && j.error.message) || ('HTTP ' + status);
@@ -892,8 +893,8 @@ function webStartFB(run){
     try {
       const r = await fetch(`${fbDocs()}/rooms/${settings.webRoom}:runQuery?key=${encodeURIComponent(FB.firebaseApiKey)}`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({structuredQuery:{
         from:[{collectionId:'subs'}],
-        where:{fieldFilter:{field:{fieldPath:'t'}, op:'GREATER_THAN_OR_EQUAL', value:{timestampValue: webSeen.tIso}}},
-        orderBy:[{field:{fieldPath:'t'}, direction:'ASCENDING'}], limit:100}})});
+        where:{fieldFilter:{field:{fieldPath:'t'}, op:'GREATER_THAN_OR_EQUAL', value:{timestampValue: lookback(webSeen.tIso)}}},
+        orderBy:[{field:{fieldPath:'t'}, direction:'ASCENDING'}], limit:300}})});
       const j = await r.json().catch(() => null);
       if (run !== web.run) return;
       if (!r.ok) throw Object.assign(new Error(fbExplain(r.status, Array.isArray(j) ? j[0] : j)), {fatal: r.status === 403 || r.status === 404 || r.status === 400});
@@ -905,7 +906,7 @@ function webStartFB(run){
         const id = d.name.split('/').pop();
         if (webSeen.ids.includes(id)) continue;
         const f = d.fields || {}, tIso = f.t && f.t.timestampValue || d.createTime;
-        webSeen.ids = [...webSeen.ids, id].slice(-200);
+        webSeen.ids = [...webSeen.ids, id].slice(-1000);
         if (tIso > webSeen.tIso) webSeen.tIso = tIso;
         saveSeen();
         const offline = Date.parse(tIso) / 1000 < web.connectedAt - 5;
@@ -926,7 +927,7 @@ function webStartFB(run){
      instead of waiting for the 30-second backup check. */
   try {
     const ping = new EventSource(NTFY + settings.webRoom + '_ping/sse');
-    ping.onmessage = e => { if (run !== web.run) return; try { if (JSON.parse(e.data).event === 'message') setTimeout(poll, 300); } catch {} };
+    ping.onmessage = e => { if (run !== web.run) return; try { if (JSON.parse(e.data).event === 'message') poll(); } catch {} };
     web.ping = ping;
   } catch {}
   poll();
@@ -1151,7 +1152,7 @@ function modStart(){
     try {
       const r = await fetch(fbUrl(`rooms/${settings.modRoom}:runQuery`), {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({structuredQuery:{
         from:[{collectionId:'acts'}],
-        where:{fieldFilter:{field:{fieldPath:'t'}, op:'GREATER_THAN_OR_EQUAL', value:{timestampValue: modSeen.tIso}}},
+        where:{fieldFilter:{field:{fieldPath:'t'}, op:'GREATER_THAN_OR_EQUAL', value:{timestampValue: lookback(modSeen.tIso)}}},
         orderBy:[{field:{fieldPath:'t'}, direction:'ASCENDING'}], limit:200}})});
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(fbExplain(r.status, Array.isArray(j) ? j[0] : j));
@@ -1178,7 +1179,7 @@ function modStart(){
       }
       const parts = Object.entries(tally).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`);
       if (parts.length) log(`Admin decisions made while you were away: ${parts.join(', ')}.`, 'ok');
-      if ((j || []).length >= 200) again = true;
+      if (rows.length && (j || []).length >= 200) again = true;
     } catch (e) {
       if (!mod.warned) { log('Admin link: ' + e.message, 'no'); mod.warned = true; }
     }
@@ -1189,7 +1190,7 @@ function modStart(){
   };
   try {
     const p = new EventSource(NTFY + settings.modRoom + '_act/sse');
-    p.onmessage = e => { if (run !== mod.run) return; try { if (JSON.parse(e.data).event === 'message') setTimeout(poll, 300); } catch {} };
+    p.onmessage = e => { if (run !== mod.run) return; try { if (JSON.parse(e.data).event === 'message') poll(); } catch {} };
     mod.ping = p;
   } catch {}
   poll(); publishState(true);

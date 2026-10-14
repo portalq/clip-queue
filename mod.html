@@ -194,6 +194,7 @@ function defaultTitle(it){
 const keyOf = it => it.platform + ':' + (it.id || it.url);
 
 let state = null;
+let want = null;   // open/close the admin asked for, shown straight away until the queue page confirms it
 let decided = new Map();   // key -> {action, n}: decisions saved while the queue page is closed
 let fresh = [];            // website links sent since the queue page last shared its queue
 const pending = new Set();
@@ -209,9 +210,10 @@ async function since(path, coll, iso, limit){
 }
 
 /* ---------- state shared by the streamer's queue page ---------- */
-let polling = false;
+let polling = false, reload = false;
 async function loadState(){
-  if (polling) return; polling = true;
+  if (polling) { reload = true; return; }
+  polling = true;
   try {
     const r = await fetch(fbUrl(`rooms/${room}/state/main`));
     if (r.status === 404) state = null;
@@ -219,7 +221,9 @@ async function loadState(){
     if (state && !online()) await loadAway(); else { decided = new Map(); fresh = []; }
   } catch {}
   polling = false;
+  if (want && state && state.open === want.open) want = null;
   render();
+  if (reload) { reload = false; loadState(); }
 }
 /* While the queue page is closed: collect decisions already made, and website links it hasn't picked up yet. */
 async function loadAway(){
@@ -271,7 +275,7 @@ async function act(action, key){
     }
     if (live) fetch(NTFY + room + '_act', {method:'POST', body:'1'}).catch(() => {});
     actMsg('');
-    if (live) setTimeout(() => { pending.delete(id); loadState(); }, 6000);
+    if (live) { setTimeout(loadState, 1500); setTimeout(loadState, 3500); setTimeout(() => { pending.delete(id); loadState(); }, 8000); }
     else { pending.delete(id); render(); }
   } catch {
     pending.delete(id); render(); actMsg("Couldn't save that. Check your connection and try again.", 'no');
@@ -305,9 +309,11 @@ function render(){
     : on ? "Live: the streamer's queue page is open"
     : "The streamer's queue page is closed. Approvals, rejections and removals are saved and applied when it opens.";
   const s = state || {requests: [], queue: [], now: null, open: false};
-  $('#tally').classList.toggle('open', !!s.open);
-  $('#lamp').textContent = s.open ? 'OPEN' : 'CLOSED';
-  $('#tallyText').textContent = s.open ? 'Taking links' : 'Not taking links';
+  if (want && Date.now() > want.until) { want = null; actMsg("The queue page didn't respond. Try again.", 'no'); }
+  const isOpen = want ? want.open : !!s.open;
+  $('#tally').classList.toggle('open', isOpen);
+  $('#lamp').textContent = isOpen ? 'OPEN' : 'CLOSED';
+  $('#tallyText').textContent = want ? (want.open ? 'Opening…' : 'Closing…') : isOpen ? 'Taking links' : 'Not taking links';
   $('#tally').disabled = !on;
   const live = on ? '' : ' disabled', can = state ? '' : ' disabled';
   $('#nowList').innerHTML = s.now ? row(s.now, `<button class="btn small" data-a="skip" data-k="${esc(s.now.key)}"${live}>Skip</button>`) : '';
@@ -328,7 +334,13 @@ document.addEventListener('click', e => {
   act(b.dataset.a, b.dataset.k);
 });
 $('#approveAll').addEventListener('click', () => act('approveAll'));
-$('#tally').addEventListener('click', () => { if (state) act(state.open ? 'close' : 'open'); });
+$('#tally').addEventListener('click', () => {
+  if (!state || !online()) return;
+  const shown = want ? want.open : state.open;
+  want = {open: !shown, until: Date.now() + 20000};
+  act(want.open ? 'open' : 'close');
+  render();
+});
 
 /* ---------- start ---------- */
 if (!room) { $('#badLink').hidden = false; $('#panel').hidden = true; }
@@ -339,7 +351,7 @@ else {
   setInterval(render, 30000);
   try {
     const es = new EventSource(NTFY + room + '_state/sse');
-    es.onmessage = e => { try { if (JSON.parse(e.data).event === 'message') setTimeout(loadState, 300); } catch {} };
+    es.onmessage = e => { try { if (JSON.parse(e.data).event === 'message') loadState(); } catch {} };
   } catch {}
 }
 })();
