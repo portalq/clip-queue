@@ -237,6 +237,17 @@ button{cursor:pointer}
             <p>Hides Instagram's header, likes and comments so the video fills the player. Turn this off for photo posts, which will look cut off.</p>
           </div>
           <div>
+            <h3>Admin link</h3>
+            <label class="chk"><input type="checkbox" id="setMod"> Let someone help manage the queue from their own device</label>
+            <div id="modBox" hidden>
+              <p id="modNote" style="margin-top:6px;color:#efd9a3" hidden></p>
+              <p style="margin-top:6px">Anyone with this link can approve, reject, remove and skip videos, so only give it to people you trust. Their changes apply while this page is open.</p>
+              <div class="share" style="margin-top:8px"><input class="field" id="modLink" readonly aria-label="Admin link"><button class="btn small" id="modCopy" type="button">Copy</button></div>
+              <div class="inline" style="margin-top:6px"><span id="modConn" class="hint" style="margin:0">Not connected</span><span class="spacer"></span><button class="btn small" id="modNew" type="button">Make a new admin link</button></div>
+              <p style="margin-top:6px">A new link stops the old one working straight away.</p>
+            </div>
+          </div>
+          <div>
             <h3>Website submissions</h3>
             <label class="chk"><input type="checkbox" id="setWeb"> Let viewers send links from a web page</label>
             <div id="webBox" hidden>
@@ -300,7 +311,7 @@ const PLATFORMS = {
   streamable:{label:'Streamable',       chip:'STRM'}
 };
 
-const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'', web:false, webReview:true, webRoom:'', reviewChat:true,
+const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'', web:false, webReview:true, webRoom:'', reviewChat:true, modOn:false, modRoom:'',
   platforms:Object.fromEntries(Object.keys(PLATFORMS).map(k => [k, true]))};
 const settings = Object.assign({}, defaults, store.get('settings', {}));
 settings.platforms = Object.assign({}, defaults.platforms, settings.platforms);
@@ -604,7 +615,7 @@ function render(){
   $('#queueEmpty').hidden = queue.length > 0; $('#queueFoot').hidden = !queue.length;
   $('#histEmpty').hidden = history.length > 0; $('#histFoot').hidden = !history.length;
   $('#nQueue').textContent = queue.length; $('#nHist').textContent = history.length;
-  renderRequests(); webStatusSync();
+  renderRequests(); webStatusSync(); publishState();
   $('#count').textContent = `${queue.length} queued`;
   const t = $('#tally'); t.classList.toggle('open', settings.open);
   $('#lamp').textContent = settings.open ? 'OPEN' : 'CLOSED';
@@ -1051,7 +1062,133 @@ $('#webCopy').addEventListener('click', () => {
   const done = () => { b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500); };
   navigator.clipboard.writeText(i.value).then(done).catch(() => { i.select(); try { document.execCommand('copy'); done(); } catch {} });
 });
-$('#channel').addEventListener('change', () => { if (settings.web) setTimeout(webUI, 0); });
+$('#channel').addEventListener('change', () => { if (settings.web) setTimeout(webUI, 0); setTimeout(modUI, 0); });
+
+/* ---------- Admin link (remote moderation) ----------
+   The queue lives in this browser. This page shares a copy through Firestore so whoever holds the private admin link
+   can see it from another device, and applies the actions they send back. The admin link's random room code is the key,
+   so it must only go to people the streamer trusts. Making a new link locks out the old one. */
+let modSeen = store.get('modSeen', {tIso:'', ids:[], nonces:[]});
+const mod = {run:0, timer:null, ping:null, pubTimer:null, last:'', warned:false};
+const saveModSeen = () => store.set('modSeen', modSeen);
+const fbUrl = path => `${fbDocs()}/${path}?key=${encodeURIComponent(FB.firebaseApiKey)}`;
+function modSetConn(t){ $('#modConn').textContent = t; }
+function modLink(){
+  const u = new URL('mod.html', location.href);
+  u.search = new URLSearchParams({room: settings.modRoom, ch: settings.channel || ''}).toString();
+  return u.href;
+}
+function applyAct(body){
+  let a; try { a = JSON.parse(body); } catch { return; }
+  if (Math.abs(Date.now() - (+a.t || 0)) > 10 * 60e3) return;
+  if (!a.n || modSeen.nonces.includes(a.n)) return;
+  modSeen.nonces = [...modSeen.nonces, a.n].slice(-300); saveModSeen();
+  const who = String(a.name || 'Admin').replace(/[\u0000-\u001f]/g, '').slice(0, 25) + ' (admin)';
+  const find = k => requests.find(r => r.key === k) || queue.find(q => q.key === k) || (current && current.key === k ? current : null);
+  const label = k => { const it = find(k); return it ? `${it.user}'s ${PLATFORMS[it.platform].label}` : 'a link'; };
+  switch (a.action) {
+    case 'approve': if (requests.some(r => r.key === a.key)) { log(`${who} approved ${label(a.key)}`, 'ok'); approve(a.key); } break;
+    case 'reject': if (requests.some(r => r.key === a.key)) { log(`${who} rejected ${label(a.key)}`); requests = requests.filter(r => r.key !== a.key); saveReq(); render(); } break;
+    case 'approveAll': if (requests.length) { log(`${who} approved all requests`, 'ok'); for (const r of [...requests]) approve(r.key); } break;
+    case 'remove': if (queue.some(q => q.key === a.key)) { log(`${who} removed ${label(a.key)} from the queue`); queue = queue.filter(q => q.key !== a.key); save(); render(); } break;
+    case 'skip': if (current && current.key === a.key) { log(`${who} skipped the current video`); playNext(); } break;
+    case 'open': settings.open = true; save(); render(); log(`${who} opened the queue`, 'ok'); break;
+    case 'close': settings.open = false; save(); render(); log(`${who} closed the queue`, 'no'); break;
+  }
+}
+function publishState(force = false){
+  if (!settings.modOn || !FB || !settings.modRoom) return;
+  clearTimeout(mod.pubTimer);
+  mod.pubTimer = setTimeout(async () => {
+    const slim = it => it ? {key: it.key, title: it.title, user: it.user, source: it.source || '', platform: it.platform, url: it.url, thumb: it.thumb || '', id: it.id || '', kind: it.kind || ''} : null;
+    const st = {v:1, ch: settings.channel || '', open: !!settings.open, now: slim(current),
+      queue: queue.slice(0, 100).map(slim), requests: requests.slice(0, 200).map(slim),
+      };
+    const sig = JSON.stringify(st);
+    if (!force && sig === mod.last) return;
+    st.ts = Date.now();
+    try {
+      const r = await fetch(fbUrl(`rooms/${settings.modRoom}/state/main`), {method:'PATCH', headers:{'content-type':'application/json'},
+        body: JSON.stringify({fields:{json:{stringValue: JSON.stringify(st)}, t:{timestampValue: new Date().toISOString()}}})});
+      if (!r.ok) { const j = await r.json().catch(() => null); throw new Error(fbExplain(r.status, j)); }
+      mod.last = sig;
+      fetch(NTFY + settings.modRoom + '_state', {method:'POST', body:'1'}).catch(() => {});
+      modSetConn('Admin link is live');
+    } catch (e) {
+      modSetConn("Couldn't share the queue, retrying…");
+      if (!mod.warned) { log('Admin link: ' + e.message, 'no'); mod.warned = true; }
+      mod.last = ''; setTimeout(() => publishState(), 15000);
+    }
+  }, force ? 0 : 600);
+}
+setInterval(() => publishState(true), 2 * 60 * 1000);
+function modStart(){
+  modStop();
+  if (!settings.modOn) return;
+  if (!FB) { modSetConn('Needs the Firebase database'); return; }
+  if (!settings.modRoom) { settings.modRoom = newRoom().replace(/^cq_/, 'cqm_'); save(); }
+  if (!modSeen.tIso) { modSeen.tIso = new Date().toISOString(); saveModSeen(); }
+  const run = ++mod.run;
+  let busy = false, again = false;
+  const poll = async () => {
+    if (run !== mod.run) return;
+    if (busy) { again = true; return; }
+    busy = true; clearTimeout(mod.timer);
+    try {
+      const r = await fetch(fbUrl(`rooms/${settings.modRoom}:runQuery`), {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({structuredQuery:{
+        from:[{collectionId:'acts'}],
+        where:{fieldFilter:{field:{fieldPath:'t'}, op:'GREATER_THAN_OR_EQUAL', value:{timestampValue: modSeen.tIso}}},
+        orderBy:[{field:{fieldPath:'t'}, direction:'ASCENDING'}], limit:50}})});
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(fbExplain(r.status, Array.isArray(j) ? j[0] : j));
+      for (const row of j || []) {
+        if (run !== mod.run) break;
+        const d = row.document; if (!d) continue;
+        const id = d.name.split('/').pop();
+        if (modSeen.ids.includes(id)) continue;
+        const f = d.fields || {}, tIso = (f.t && f.t.timestampValue) || d.createTime;
+        modSeen.ids = [...modSeen.ids, id].slice(-300);
+        if (tIso > modSeen.tIso) modSeen.tIso = tIso;
+        saveModSeen();
+        if (f.kind && f.kind.stringValue === 'act') applyAct((f.body && f.body.stringValue) || '');
+      }
+    } catch (e) {
+      if (!mod.warned) { log('Admin link: ' + e.message, 'no'); mod.warned = true; }
+    }
+    busy = false;
+    if (run !== mod.run) return;
+    if (again) { again = false; poll(); return; }
+    mod.timer = setTimeout(poll, 30000);
+  };
+  try {
+    const p = new EventSource(NTFY + settings.modRoom + '_act/sse');
+    p.onmessage = e => { if (run !== mod.run) return; try { if (JSON.parse(e.data).event === 'message') setTimeout(poll, 300); } catch {} };
+    mod.ping = p;
+  } catch {}
+  poll(); publishState(true);
+}
+function modStop(){ mod.run++; clearTimeout(mod.timer); if (mod.ping) { mod.ping.close(); mod.ping = null; } }
+function modUI(){
+  $('#setMod').checked = settings.modOn;
+  $('#modBox').hidden = !settings.modOn;
+  if (settings.modOn && settings.modRoom) $('#modLink').value = modLink();
+  const note = FB ? '' : 'This needs the Firebase database set up in config.js.';
+  $('#modNote').textContent = note; $('#modNote').hidden = !note;
+}
+$('#setMod').addEventListener('change', e => { settings.modOn = e.target.checked; save(); if (settings.modOn) modStart(); else { modStop(); modSetConn('Not connected'); } modUI(); });
+$('#modNew').addEventListener('click', e => {
+  const b = e.currentTarget;
+  if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Click again to confirm'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'Make a new admin link'; }, 3000); return; }
+  delete b.dataset.armed; b.textContent = 'Make a new admin link';
+  settings.modRoom = newRoom().replace(/^cq_/, 'cqm_'); modSeen = {tIso: new Date().toISOString(), ids: [], nonces: []};
+  save(); saveModSeen(); modStart(); modUI();
+  log('Made a new admin link. The old one no longer works.', 'ok');
+});
+$('#modCopy').addEventListener('click', () => {
+  const i = $('#modLink'), b = $('#modCopy');
+  const done = () => { b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500); };
+  navigator.clipboard.writeText(i.value).then(done).catch(() => { i.select(); try { document.execCommand('copy'); done(); } catch {} });
+});
 
 /* ---------- UI wiring ---------- */
 $('#connectForm').addEventListener('submit', e => { e.preventDefault(); connect($('#channel').value); });
@@ -1117,6 +1254,7 @@ renderPlayer(); render();
 log('Ready. Enter a channel name and press Connect.');
 if (settings.channel) connect(settings.channel);
 webUI(); if (settings.web) webStart();
+modUI(); if (settings.modOn) modStart();
 
 window.__cq = {parseLink, findLinks};
 })();

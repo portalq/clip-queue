@@ -18,5 +18,27 @@ service cloud.firestore {
         && request.resource.data.exp < request.time + duration.value(191, 'd');
       allow update, delete: if false;
     }
+    // Admin link: the streamer's queue page shares a copy of the queue here for the admin page.
+    match /rooms/{room}/state/{doc} {
+      allow read: if room.size() >= 10;
+      allow create, update: if room.size() >= 10 && doc == 'main'
+        && request.resource.data.keys().hasOnly(['json', 't'])
+        && request.resource.data.json is string && request.resource.data.json.size() < 900000
+        && request.resource.data.t is timestamp;
+      allow delete: if false;
+    }
+    // Admin link: actions sent from the admin page. Only someone with the private admin link knows this room code.
+    match /rooms/{room}/acts/{act} {
+      allow read: if room.size() >= 10;
+      allow create: if room.size() >= 10
+        && request.resource.data.keys().hasOnly(['kind', 'body', 'sig', 't'])
+        && request.resource.data.kind == 'act'
+        && request.resource.data.body is string && request.resource.data.body.size() <= 1000
+        && request.resource.data.sig is string && request.resource.data.sig.size() <= 200
+        && request.resource.data.t is timestamp
+        && request.resource.data.t > request.time - duration.value(5, 'm')
+        && request.resource.data.t < request.time + duration.value(5, 'm');
+      allow update, delete: if false;
+    }
   }
 }

@@ -27,6 +27,18 @@ YouTube moderators and the channel owner can use the `!cq` commands. Channel mem
 
 By default, links from Twitch and YouTube chat go to the **Requests** tab first. Approve them there to add them to the queue, or reject them. Switch this off under **Settings → Who can add links → Review chat links before they join the queue** to send chat links straight to the queue.
 
+## Admin link
+
+Someone the streamer trusts can help manage the queue from their own device, with no sign-in.
+
+1. On the queue page, open **Settings → Admin link** and tick **Let someone help manage the queue from their own device**.
+2. Copy the link and send it privately to the helper. Never post it in chat: anyone with it can manage the queue.
+3. The helper opens it to see Now playing, Requests and the Queue, and can approve, reject, remove, skip, and open or close the queue.
+
+Changes apply while the streamer's queue page is open. If the link leaks, press **Make a new admin link** and the old one stops working.
+
+This needs the Firebase database, and the **Rules** in Firebase must be the latest [`firestore.rules`](firestore.rules).
+
 ## Website submissions
 
 Viewers can send links from a web page instead of posting them in chat, with or without a name.
