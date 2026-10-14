@@ -15,7 +15,7 @@ service cloud.firestore {
         && request.resource.data.t > request.time - duration.value(5, 'm')
         && request.resource.data.t < request.time + duration.value(5, 'm')
         && request.resource.data.exp is timestamp
-        && request.resource.data.exp < request.time + duration.value(31, 'd');
+        && request.resource.data.exp < request.time + duration.value(191, 'd');
       allow update, delete: if false;
     }
   }

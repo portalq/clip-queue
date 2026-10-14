@@ -83,10 +83,10 @@ const store = { get(k, d){ try { return localStorage.getItem('cqs:'+k) ?? d; } c
 const NTFY = 'https://ntfy.sh/';
 const COOLDOWN = 20;
 const FB = (window.CQ_CONFIG && CQ_CONFIG.firebaseProjectId && CQ_CONFIG.firebaseApiKey) ? CQ_CONFIG : null;
-const KEEP = FB ? '30 days' : '12 hours';
+const KEEP = FB ? '190 days' : '12 hours';
 async function sendLink(url, name){
   if (!FB) return fetch(NTFY + room, {method:'POST', body: JSON.stringify({v:1, url, name, uid})});
-  const now = new Date(), exp = new Date(now.getTime() + 30 * 864e5);
+  const now = new Date(), exp = new Date(now.getTime() + 190 * 864e5);
   return fetch(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(FB.firebaseProjectId)}/databases/(default)/documents/rooms/${room}/subs?key=${encodeURIComponent(FB.firebaseApiKey)}`, {
     method:'POST', headers:{'content-type':'application/json'},
     body: JSON.stringify({fields:{url:{stringValue:url}, name:{stringValue:name}, uid:{stringValue:uid}, t:{timestampValue:now.toISOString()}, exp:{timestampValue:exp.toISOString()}}})});

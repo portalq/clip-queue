@@ -852,7 +852,7 @@ function noteCaughtUp(){
 }
 /* ---- Firestore storage (used when config.js has a Firebase project) ---- */
 const FB = (window.CQ_CONFIG && CQ_CONFIG.firebaseProjectId && CQ_CONFIG.firebaseApiKey) ? CQ_CONFIG : null;
-const KEEP_DAYS = FB ? 30 : 0.5;
+const KEEP_DAYS = FB ? 190 : 0.5;
 const fbDocs = () => `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(FB.firebaseProjectId)}/databases/(default)/documents`;
 function fbExplain(status, j){
   const msg = (j && j.error && j.error.message) || ('HTTP ' + status);
@@ -996,7 +996,7 @@ window.addEventListener('pagehide', () => {
   if (settings.web && settings.webRoom) try { navigator.sendBeacon(NTFY + settings.webRoom + '_status', JSON.stringify({v:1, open:false, offline:true, taking: !!settings.open, ch: settings.channel || yt.label || ''})); } catch {}
 });
 function webUI(){
-  $('#webAwayNote').textContent = `Viewers can send links while this page is closed. Next time you open it, anything sent in the last ${FB ? '30 days' : '12 hours'} lands in Requests for you to approve.`;
+  $('#webAwayNote').textContent = `Viewers can send links while this page is closed. Next time you open it, anything sent in the last ${FB ? '190 days' : '12 hours'} lands in Requests for you to approve.`;
   $('#setWeb').checked = settings.web;
   $('#webBox').hidden = !settings.web;
   $('#setWebReview').checked = settings.webReview;

@@ -37,16 +37,16 @@ Viewers can also send links while the queue page is closed. The submit page show
 
 Without Firebase set up, submissions travel through [ntfy.sh](https://ntfy.sh), a free public relay that keeps messages for 12 hours.
 
-### Keeping website links for 30 days (Firebase)
+### Keeping website links for 190 days (Firebase)
 
-Once `config.js` has a Firebase project in it, website links are stored for 30 days instead. One project serves everyone who uses this site.
+Once `config.js` has a Firebase project in it, website links are stored for 190 days instead. One project serves everyone who uses this site.
 
 1. Go to https://console.firebase.google.com and click **Create a project**. You can pick your existing Google Cloud project. Google Analytics isn't needed.
 2. Open **Build → Firestore Database → Create database**. Choose a location (e.g. `europe-west2 (London)`) and **Start in production mode**.
 3. Open the **Rules** tab, replace everything with the contents of [`firestore.rules`](firestore.rules) and click **Publish**.
 4. Click the gear icon → **Project settings**. Under **Your apps**, click the web icon `</>`, give it any name and click **Register app**.
 5. Copy `projectId` and `apiKey` from the code it shows into `config.js`. These two values are meant to be public; the rules control what anyone can do.
-6. Optional cleanup: in Firestore, open **TTL**, add a policy for collection group `subs` with timestamp field `exp`. Old links are then deleted automatically after 30 days.
+6. Optional cleanup: in Firestore, open **TTL**, add a policy for collection group `subs` with timestamp field `exp`. Old links are then deleted automatically after 190 days.
 
 ## Mod commands
 
