@@ -52,6 +52,11 @@ a.btn{text-decoration:none;color:var(--fg)}
 .list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .item{display:grid;grid-template-columns:96px minmax(0,1fr) auto;align-items:center;gap:12px;padding:8px;border-radius:8px;background:var(--raised)}
 .item.busy{opacity:.5}
+.item.decided{opacity:.72}
+.tag{display:inline-block;font:500 10px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:3px 6px;border-radius:4px;margin-right:6px;vertical-align:2px;background:var(--panel);border:1px solid var(--line);color:var(--muted)}
+.tag.approve{color:var(--ok);border-color:currentColor}
+.tag.reject,.tag.remove{color:#f0a6a8;border-color:currentColor}
+.tag.new{color:var(--accent);border-color:currentColor}
 .txt{min-width:0}
 .t{font-weight:500;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
 .u{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -122,11 +127,86 @@ if (ch) { $('#heading').innerHTML = 'Queue for <span></span>'; $('#heading span'
 try { $('#myName').value = localStorage.getItem('cqadmin:name') || ''; } catch {}
 $('#myName').addEventListener('change', e => { try { localStorage.setItem('cqadmin:name', e.target.value.trim()); } catch {} });
 
+function parseTime(t){
+  if (!t) return 0;
+  if (/^\d+$/.test(t)) return +t;
+  const m = t.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+  return m ? (+m[1]||0)*3600 + (+m[2]||0)*60 + (+m[3]||0) : 0;
+}
+function parseLink(raw){
+  let s = raw.trim().replace(/[)\]}>.,!?'"]+$/, '');
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+  let u; try { u = new URL(s); } catch { return null; }
+  const host = u.hostname.toLowerCase().replace(/^(www|m|mobile)\./, '');
+  const p = u.pathname.split('/').filter(Boolean);
+  const url = u.href;
+
+  const yt = (id, shorts) => /^[\w-]{11}$/.test(id) ? {platform:'youtube', id, url, shape: shorts ? 'tall' : 'wide', start: parseTime(u.searchParams.get('t') || u.searchParams.get('start'))} : null;
+  if (host === 'youtube.com' || host === 'music.youtube.com') {
+    if (p[0] === 'watch') return yt(u.searchParams.get('v') || '');
+    if (['shorts','live','embed'].includes(p[0]) && p[1]) return yt(p[1], p[0] === 'shorts');
+    return null;
+  }
+  if (host === 'youtu.be' && p[0]) return yt(p[0]);
+
+  if (host === 'clips.twitch.tv' && p[0] && p[0] !== 'embed') return {platform:'twitch', id:p[0], url, shape:'wide'};
+  if (host === 'twitch.tv' && p[1] === 'clip' && p[2]) return {platform:'twitch', id:p[2], url, shape:'wide', channel:p[0]};
+
+  if (host === 'vm.tiktok.com' || host === 'vt.tiktok.com' || (host === 'tiktok.com' && p[0] === 't'))
+    return {platform:'tiktok', id:null, url, shape:'tall', shortLink:true};
+  if (host === 'tiktok.com') {
+    const id = p.find(x => /^\d{15,}$/.test(x));
+    if (id) return {platform:'tiktok', id, url, shape:'tall', author: (p[0]||'').startsWith('@') ? p[0] : ''};
+    return null;
+  }
+
+  if (host === 'instagram.com') {
+    const i = p.findIndex(x => ['reel','reels','p','tv'].includes(x));
+    if (i >= 0 && p[i+1]) return {platform:'instagram', id:p[i+1], kind: p[i] === 'p' ? 'p' : 'reel', url, shape:'tall'};
+    return null;
+  }
+
+  if (['twitter.com','x.com','fxtwitter.com','vxtwitter.com','fixupx.com','fixvx.com','fxtwitter.com'].includes(host)) {
+    const i = p.indexOf('status');
+    if (i >= 0 && /^\d+$/.test(p[i+1]||'')) return {platform:'twitter', id:p[i+1], url, shape:'tweet', author: i > 0 && p[0] !== 'i' ? '@'+p[0] : ''};
+    return null;
+  }
+
+  if (host === 'streamable.com' && p[0]) {
+    const id = p[0] === 'e' || p[0] === 'o' ? p[1] : p[0];
+    if (id) return {platform:'streamable', id, url, shape:'wide'};
+  }
+  return null;
+}
+
+function defaultTitle(it){
+  switch (it.platform) {
+    case 'youtube': return it.shape === 'tall' ? 'YouTube Short' : 'YouTube video';
+    case 'twitch': return it.channel ? `Clip from ${it.channel}` : 'Twitch clip';
+    case 'tiktok': return it.author ? `TikTok by ${it.author}` : 'TikTok';
+    case 'instagram': return it.kind === 'p' ? 'Instagram post' : 'Instagram reel';
+    case 'twitter': return it.author ? `Post by ${it.author}` : 'Post on X';
+    case 'streamable': return 'Streamable video';
+  }
+  return it.url;
+}
+
+const keyOf = it => it.platform + ':' + (it.id || it.url);
+
 let state = null;
+let decided = new Map();   // key -> {action, n}: decisions saved while the queue page is closed
+let fresh = [];            // website links sent since the queue page last shared its queue
 const pending = new Set();
 const docs = () => `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(CFG.firebaseProjectId)}/databases/(default)/documents`;
 const fbUrl = p => `${docs()}/${p}?key=${encodeURIComponent(CFG.firebaseApiKey)}`;
 const nonce = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+async function since(path, coll, iso, limit){
+  const r = await fetch(fbUrl(`${path}:runQuery`), {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({structuredQuery:{
+    from:[{collectionId: coll}], where:{fieldFilter:{field:{fieldPath:'t'}, op:'GREATER_THAN', value:{timestampValue: iso}}},
+    orderBy:[{field:{fieldPath:'t'}, direction:'ASCENDING'}], limit}})});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return ((await r.json()) || []).map(x => x.document).filter(Boolean);
+}
 
 /* ---------- state shared by the streamer's queue page ---------- */
 let polling = false;
@@ -136,28 +216,65 @@ async function loadState(){
     const r = await fetch(fbUrl(`rooms/${room}/state/main`));
     if (r.status === 404) state = null;
     else if (r.ok) { const j = await r.json(); state = JSON.parse(j.fields.json.stringValue); }
+    if (state && !online()) await loadAway(); else { decided = new Map(); fresh = []; }
   } catch {}
   polling = false;
   render();
 }
+/* While the queue page is closed: collect decisions already made, and website links it hasn't picked up yet. */
+async function loadAway(){
+  const iso = new Date((state.ts || 0) - 2000).toISOString();
+  const acts = await since(`rooms/${room}`, 'acts', iso, 300);
+  const list = acts.map(d => { try { return JSON.parse(d.fields.body.stringValue); } catch { return null; } }).filter(Boolean);
+  const undone = new Set(list.filter(a => a.action === 'undo').map(a => a.ref));
+  const m = new Map();
+  for (const a of list) if (['approve', 'reject', 'remove'].includes(a.action) && !undone.has(a.n)) m.set(a.key, {action: a.action, n: a.n});
+  decided = m;
+  fresh = [];
+  if (state.webRoom) {
+    const known = new Set([...(state.requests || []), ...(state.queue || [])].map(x => x.key));
+    if (state.now) known.add(state.now.key);
+    for (const d of await since(`rooms/${state.webRoom}`, 'subs', iso, 100)) {
+      const f = d.fields || {}, link = parseLink(String((f.url && f.url.stringValue) || '').slice(0, 500));
+      if (!link || link.shortLink) continue;
+      const key = keyOf(link);
+      if (known.has(key)) continue;
+      known.add(key);
+      fresh.push({...link, key, user: ((f.name && f.name.stringValue) || '').trim() || 'Anonymous', source: 'Website', title: defaultTitle(link), isNew: true});
+    }
+  }
+}
 const online = () => state && Date.now() - (state.ts || 0) < 5 * 60 * 1000;
 
 /* ---------- actions ---------- */
+async function send(body){
+  const r = await fetch(fbUrl(`rooms/${room}/acts`), {method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({fields:{kind:{stringValue:'act'}, body:{stringValue: JSON.stringify(body)}, sig:{stringValue:''}, t:{timestampValue:new Date().toISOString()}}})});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+}
 async function act(action, key){
-  if (!online()) return;
+  const live = online();
+  if (!state || (!live && !['approve', 'reject', 'remove', 'undo', 'approveAll'].includes(action))) return;
   const id = action + ':' + (key || '');
   if (pending.has(id)) return;
   pending.add(id); render();
+  const name = $('#myName').value.trim().slice(0, 25);
   try {
-    const body = JSON.stringify({action, key: key || '', name: $('#myName').value.trim().slice(0, 25), t: Date.now(), n: nonce()});
-    const r = await fetch(fbUrl(`rooms/${room}/acts`), {method:'POST', headers:{'content-type':'application/json'},
-      body: JSON.stringify({fields:{kind:{stringValue:'act'}, body:{stringValue:body}, sig:{stringValue:''}, t:{timestampValue:new Date().toISOString()}}})});
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    fetch(NTFY + room + '_act', {method:'POST', body:'1'}).catch(() => {});
+    if (action === 'approveAll' && !live) {
+      for (const it of requestItems()) if (!decided.has(it.key)) { const n = nonce(); await send({action:'approve', key: it.key, name, t: Date.now(), n}); decided.set(it.key, {action:'approve', n}); }
+    } else if (action === 'undo') {
+      const d = decided.get(key); if (d) { await send({action:'undo', ref: d.n, key, name, t: Date.now(), n: nonce()}); decided.delete(key); }
+    } else {
+      const n = nonce();
+      await send({action, key: key || '', name, t: Date.now(), n});
+      if (!live) decided.set(key, {action, n});
+    }
+    if (live) fetch(NTFY + room + '_act', {method:'POST', body:'1'}).catch(() => {});
     actMsg('');
-    setTimeout(() => { pending.delete(id); loadState(); }, 6000);
+    if (live) setTimeout(() => { pending.delete(id); loadState(); }, 6000);
+    else { pending.delete(id); render(); }
   } catch {
-    pending.delete(id); render(); actMsg("Couldn't send that. Check your connection and try again.", 'no');
+    pending.delete(id); render(); actMsg("Couldn't save that. Check your connection and try again.", 'no');
   }
 }
 function actMsg(t, cls){ const m = $('#actMsg'); m.textContent = t; m.className = 'msg ' + (cls || ''); }
@@ -168,34 +285,41 @@ function thumbOf(it){
   if (it.platform === 'youtube' && it.id) return `https://i.ytimg.com/vi/${it.id}/mqdefault.jpg`;
   return '';
 }
+const WORD = {approve:'Approved', reject:'Rejected', remove:'Will be removed'};
 function row(it, buttons){
-  const src = thumbOf(it), chip = CHIP[it.platform] || '?';
-  return `<li class="item${[...pending].some(p => p.endsWith(':' + it.key)) ? ' busy' : ''}">
+  const src = thumbOf(it), chip = CHIP[it.platform] || '?', d = decided.get(it.key);
+  const tag = d ? `<span class="tag ${d.action}">${WORD[d.action]}</span>` : it.isNew ? '<span class="tag new">New</span>' : '';
+  const btns = d ? `<button class="btn small" data-a="undo" data-k="${esc(it.key)}">Undo</button>` : buttons;
+  return `<li class="item${[...pending].some(p => p.endsWith(':' + it.key)) ? ' busy' : ''}${d ? ' decided' : ''}">
     <span class="thumb c-${esc(it.platform)}${src ? '' : ' noimg'}" aria-hidden="true">${chip}${src ? `<img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer"><span class="badge">${chip}</span>` : ''}</span>
-    <div class="txt"><div class="t">${esc(it.title)}</div><div class="u">${esc(it.user)}${it.source ? ' · ' + esc(it.source) : ''}</div></div>
-    <div class="acts">${buttons}<a class="btn small" href="${esc(it.url)}" target="_blank" rel="noopener">Preview</a></div></li>`;
+    <div class="txt"><div class="t">${tag}${esc(it.title)}</div><div class="u">${esc(it.user)}${it.source ? ' · ' + esc(it.source) : ''}</div></div>
+    <div class="acts">${btns}<a class="btn small" href="${esc(it.url)}" target="_blank" rel="noopener">Preview</a></div></li>`;
 }
 document.addEventListener('error', e => { const i = e.target; if (i && i.tagName === 'IMG' && i.parentElement && i.parentElement.classList.contains('thumb')) { i.parentElement.classList.add('noimg'); i.remove(); } }, true);
+const requestItems = () => [...((state && state.requests) || []), ...fresh];
 
 function render(){
   const on = online();
   $('#liveStatus').className = 'status ' + (!state ? 'wait' : on ? 'on' : 'off');
-  $('#liveText').textContent = !state ? "Waiting for the streamer's queue page to share the queue" : on ? "Live: the streamer's queue page is open" : "The streamer's queue page is closed. You can make changes when it's open.";
+  $('#liveText').textContent = !state ? "Waiting for the streamer's queue page to share the queue"
+    : on ? "Live: the streamer's queue page is open"
+    : "The streamer's queue page is closed. Approvals, rejections and removals are saved and applied when it opens.";
   const s = state || {requests: [], queue: [], now: null, open: false};
   $('#tally').classList.toggle('open', !!s.open);
   $('#lamp').textContent = s.open ? 'OPEN' : 'CLOSED';
   $('#tallyText').textContent = s.open ? 'Taking links' : 'Not taking links';
   $('#tally').disabled = !on;
-  const dis = on ? '' : ' disabled';
-  $('#nowList').innerHTML = s.now ? row(s.now, `<button class="btn small" data-a="skip" data-k="${esc(s.now.key)}"${dis}>Skip</button>`) : '';
+  const live = on ? '' : ' disabled', can = state ? '' : ' disabled';
+  $('#nowList').innerHTML = s.now ? row(s.now, `<button class="btn small" data-a="skip" data-k="${esc(s.now.key)}"${live}>Skip</button>`) : '';
   $('#nowEmpty').hidden = !!s.now;
-  const reqs = s.requests || [], qu = s.queue || [];
+  const reqs = requestItems(), qu = s.queue || [];
   $('#reqList').innerHTML = reqs.map(it => row(it,
-    `<button class="btn small primary" data-a="approve" data-k="${esc(it.key)}"${dis}>Approve</button><button class="btn small" data-a="reject" data-k="${esc(it.key)}"${dis}>Reject</button>`)).join('');
+    `<button class="btn small primary" data-a="approve" data-k="${esc(it.key)}"${can}>Approve</button><button class="btn small" data-a="reject" data-k="${esc(it.key)}"${can}>Reject</button>`)).join('');
   $('#reqEmpty').hidden = reqs.length > 0;
-  $('#nReq').textContent = reqs.length; $('#nReq').classList.toggle('zero', !reqs.length);
-  $('#approveAll').hidden = !reqs.length; $('#approveAll').disabled = !on;
-  $('#queueList').innerHTML = qu.map(it => row(it, `<button class="btn small" data-a="remove" data-k="${esc(it.key)}"${dis}>Remove</button>`)).join('');
+  const open = reqs.filter(it => !decided.has(it.key)).length;
+  $('#nReq').textContent = open; $('#nReq').classList.toggle('zero', !open);
+  $('#approveAll').hidden = !open; $('#approveAll').disabled = !state;
+  $('#queueList').innerHTML = qu.map(it => row(it, `<button class="btn small" data-a="remove" data-k="${esc(it.key)}"${can}>Remove</button>`)).join('');
   $('#queueEmpty').hidden = qu.length > 0;
   $('#nQueue').textContent = qu.length;
 }

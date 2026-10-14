@@ -848,6 +848,7 @@ function command(rest, user){
 /* ---------- Website submissions (relayed through ntfy.sh) ---------- */
 const NTFY = 'https://ntfy.sh/';
 const web = {es:null, retry:null, run:0, sentOpen:null, connectedAt:0, caughtUp:0};
+let webReadyResolve; const webReady = new Promise(r => { webReadyResolve = r; });
 /* Remember the newest submission seen, so reopening the page collects anything sent while it was closed (ntfy.sh keeps messages for 12 hours). */
 let webSeen = store.get('webSeen', {time:0, ids:[]});
 const saveSeen = () => store.set('webSeen', webSeen);
@@ -916,7 +917,7 @@ function webStartFB(run){
       webSetConn('Connection problem, retrying…');
       if (!warned) { log('Website submissions: ' + e.message, 'no'); warned = true; }
     }
-    busy = false;
+    busy = false; webReadyResolve();
     if (run !== web.run) return;
     if (again) { again = false; poll(); return; }
     web.retry = setTimeout(poll, 30000);
@@ -936,6 +937,7 @@ function webStart(){
   if (!settings.webRoom) { settings.webRoom = newRoom(); save(); }
   if (FB) { const run = ++web.run; web.connectedAt = Math.floor(Date.now() / 1000); web.caughtUp = 0; webSetConn('Connecting…'); webStartFB(run); return; }
   if (!webSeen.time) { webSeen.time = Math.floor(Date.now() / 1000); saveSeen(); }
+  setTimeout(webReadyResolve, 3000);
   const run = ++web.run;
   const since = webSeen.time ? '?since=' + Math.max(0, webSeen.time - 1) : '';
   web.connectedAt = Math.floor(Date.now() / 1000); web.caughtUp = 0;
@@ -1078,30 +1080,40 @@ function modLink(){
   u.search = new URLSearchParams({room: settings.modRoom, ch: settings.channel || ''}).toString();
   return u.href;
 }
-function applyAct(body){
-  let a; try { a = JSON.parse(body); } catch { return; }
-  if (Math.abs(Date.now() - (+a.t || 0)) > 10 * 60e3) return;
-  if (!a.n || modSeen.nonces.includes(a.n)) return;
-  modSeen.nonces = [...modSeen.nonces, a.n].slice(-300); saveModSeen();
+/* Approve, reject and remove can be decided while this page is closed; they're applied when it next opens.
+   Skip and open/close only make sense live, so those expire after 10 minutes. */
+function applyAct(a, away){
+  const age = Date.now() - (+a.t || 0);
+  if (['skip', 'open', 'close'].includes(a.action) ? Math.abs(age) > 10 * 60e3 : age > 200 * 864e5) return null;
+  if (!a.n || modSeen.nonces.includes(a.n)) return null;
+  modSeen.nonces = [...modSeen.nonces, a.n].slice(-1000); saveModSeen();
   const who = String(a.name || 'Admin').replace(/[\u0000-\u001f]/g, '').slice(0, 25) + ' (admin)';
   const find = k => requests.find(r => r.key === k) || queue.find(q => q.key === k) || (current && current.key === k ? current : null);
   const label = k => { const it = find(k); return it ? `${it.user}'s ${PLATFORMS[it.platform].label}` : 'a link'; };
+  const when = away ? ' while you were away' : '';
   switch (a.action) {
-    case 'approve': if (requests.some(r => r.key === a.key)) { log(`${who} approved ${label(a.key)}`, 'ok'); approve(a.key); } break;
-    case 'reject': if (requests.some(r => r.key === a.key)) { log(`${who} rejected ${label(a.key)}`); requests = requests.filter(r => r.key !== a.key); saveReq(); render(); } break;
-    case 'approveAll': if (requests.length) { log(`${who} approved all requests`, 'ok'); for (const r of [...requests]) approve(r.key); } break;
-    case 'remove': if (queue.some(q => q.key === a.key)) { log(`${who} removed ${label(a.key)} from the queue`); queue = queue.filter(q => q.key !== a.key); save(); render(); } break;
-    case 'skip': if (current && current.key === a.key) { log(`${who} skipped the current video`); playNext(); } break;
-    case 'open': settings.open = true; save(); render(); log(`${who} opened the queue`, 'ok'); break;
-    case 'close': settings.open = false; save(); render(); log(`${who} closed the queue`, 'no'); break;
+    case 'approve':
+      if (!requests.some(r => r.key === a.key)) { if (away) log(`${who}'s approval${when} was skipped: that link was no longer waiting`, 'no'); return null; }
+      log(`${who} approved ${label(a.key)}${when}`, 'ok'); approve(a.key); return 'approved';
+    case 'reject':
+      if (!requests.some(r => r.key === a.key)) { if (away) log(`${who}'s rejection${when} was skipped: that link was no longer waiting`, 'no'); return null; }
+      log(`${who} rejected ${label(a.key)}${when}`); requests = requests.filter(r => r.key !== a.key); saveReq(); render(); return 'rejected';
+    case 'approveAll': if (requests.length) { log(`${who} approved all requests`, 'ok'); for (const r of [...requests]) approve(r.key); } return null;
+    case 'remove':
+      if (!queue.some(q => q.key === a.key)) return null;
+      log(`${who} removed ${label(a.key)} from the queue${when}`); queue = queue.filter(q => q.key !== a.key); save(); render(); return 'removed';
+    case 'skip': if (current && current.key === a.key) { log(`${who} skipped the current video`); playNext(); } return null;
+    case 'open': settings.open = true; save(); render(); log(`${who} opened the queue`, 'ok'); return null;
+    case 'close': settings.open = false; save(); render(); log(`${who} closed the queue`, 'no'); return null;
   }
+  return null;
 }
 function publishState(force = false){
   if (!settings.modOn || !FB || !settings.modRoom) return;
   clearTimeout(mod.pubTimer);
   mod.pubTimer = setTimeout(async () => {
     const slim = it => it ? {key: it.key, title: it.title, user: it.user, source: it.source || '', platform: it.platform, url: it.url, thumb: it.thumb || '', id: it.id || '', kind: it.kind || ''} : null;
-    const st = {v:1, ch: settings.channel || '', open: !!settings.open, now: slim(current),
+    const st = {v:1, ch: settings.channel || '', open: !!settings.open, webRoom: settings.web && FB ? settings.webRoom : '', now: slim(current),
       queue: queue.slice(0, 100).map(slim), requests: requests.slice(0, 200).map(slim),
       };
     const sig = JSON.stringify(st);
@@ -1129,29 +1141,44 @@ function modStart(){
   if (!settings.modRoom) { settings.modRoom = newRoom().replace(/^cq_/, 'cqm_'); save(); }
   if (!modSeen.tIso) { modSeen.tIso = new Date().toISOString(); saveModSeen(); }
   const run = ++mod.run;
-  let busy = false, again = false;
+  let busy = false, again = false, first = true;
+  const startedAt = Date.now();
   const poll = async () => {
     if (run !== mod.run) return;
     if (busy) { again = true; return; }
     busy = true; clearTimeout(mod.timer);
+    if (first) { first = false; await Promise.race([webReady, new Promise(r => setTimeout(r, 15000))]); }
     try {
       const r = await fetch(fbUrl(`rooms/${settings.modRoom}:runQuery`), {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({structuredQuery:{
         from:[{collectionId:'acts'}],
         where:{fieldFilter:{field:{fieldPath:'t'}, op:'GREATER_THAN_OR_EQUAL', value:{timestampValue: modSeen.tIso}}},
-        orderBy:[{field:{fieldPath:'t'}, direction:'ASCENDING'}], limit:50}})});
+        orderBy:[{field:{fieldPath:'t'}, direction:'ASCENDING'}], limit:200}})});
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(fbExplain(r.status, Array.isArray(j) ? j[0] : j));
+      const rows = [];
       for (const row of j || []) {
-        if (run !== mod.run) break;
         const d = row.document; if (!d) continue;
         const id = d.name.split('/').pop();
         if (modSeen.ids.includes(id)) continue;
-        const f = d.fields || {}, tIso = (f.t && f.t.timestampValue) || d.createTime;
-        modSeen.ids = [...modSeen.ids, id].slice(-300);
-        if (tIso > modSeen.tIso) modSeen.tIso = tIso;
-        saveModSeen();
-        if (f.kind && f.kind.stringValue === 'act') applyAct((f.body && f.body.stringValue) || '');
+        const f = d.fields || {};
+        let a = null; try { a = JSON.parse((f.body && f.body.stringValue) || ''); } catch {}
+        rows.push({id, tIso: (f.t && f.t.timestampValue) || d.createTime, a});
       }
+      const undone = new Set(rows.filter(x => x.a && x.a.action === 'undo').map(x => x.a.ref));
+      const tally = {approved:0, rejected:0, removed:0};
+      for (const x of rows) {
+        if (run !== mod.run) break;
+        modSeen.ids = [...modSeen.ids, x.id].slice(-1000);
+        if (x.tIso > modSeen.tIso) modSeen.tIso = x.tIso;
+        saveModSeen();
+        if (!x.a || x.a.action === 'undo' || undone.has(x.a.n)) continue;
+        const away = (+x.a.t || 0) < startedAt - 5000;
+        const done = applyAct(x.a, away);
+        if (away && done) tally[done]++;
+      }
+      const parts = Object.entries(tally).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`);
+      if (parts.length) log(`Admin decisions made while you were away: ${parts.join(', ')}.`, 'ok');
+      if ((j || []).length >= 200) again = true;
     } catch (e) {
       if (!mod.warned) { log('Admin link: ' + e.message, 'no'); mod.warned = true; }
     }
@@ -1253,7 +1280,7 @@ $('#channel').value = settings.channel;
 renderPlayer(); render();
 log('Ready. Enter a channel name and press Connect.');
 if (settings.channel) connect(settings.channel);
-webUI(); if (settings.web) webStart();
+webUI(); if (settings.web) webStart(); else webReadyResolve();
 modUI(); if (settings.modOn) modStart();
 
 window.__cq = {parseLink, findLinks};

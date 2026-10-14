@@ -35,7 +35,9 @@ Someone the streamer trusts can help manage the queue from their own device, wit
 2. Copy the link and send it privately to the helper. Never post it in chat: anyone with it can manage the queue.
 3. The helper opens it to see Now playing, Requests and the Queue, and can approve, reject, remove, skip, and open or close the queue.
 
-Changes apply while the streamer's queue page is open. If the link leaks, press **Make a new admin link** and the old one stops working.
+While the streamer's queue page is open, changes apply within a couple of seconds. While it's closed, the admin page still shows the last queue plus any new website submissions. Approvals, rejections and removals are saved (with an **Undo** button) and applied the next time the queue page opens. Skip and open/close only work while it's open.
+
+If the link leaks, press **Make a new admin link** and the old one stops working.
 
 This needs the Firebase database, and the **Rules** in Firebase must be the latest [`firestore.rules`](firestore.rules).
 
