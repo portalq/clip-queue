@@ -33,7 +33,9 @@ Viewers can send links from a web page instead of posting them in chat, with or 
 
 The submit page shows viewers whether the queue is open. Each viewer can send one link every 20 seconds, and the per-person limit in Settings still applies. If the link gets spammed, press **Make a new link** and the old one stops working.
 
-Submissions travel through [ntfy.sh](https://ntfy.sh), a free public relay, so the queue page needs to be open to receive them. Links sent while it's closed are not added later.
+Viewers can also send links while the queue page is closed. The submit page shows the streamer as offline, and the next time the queue page is opened, anything sent in the last 12 hours appears in **Requests** for approval. Links older than 12 hours are dropped.
+
+Submissions travel through [ntfy.sh](https://ntfy.sh), a free public relay that keeps messages for 12 hours.
 
 ## Mod commands
 

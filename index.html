@@ -243,6 +243,7 @@ button{cursor:pointer}
               <label class="chk" style="margin-top:6px"><input type="checkbox" id="setWebReview"> Review website links before they join the queue</label>
               <div class="inline" style="margin-top:4px"><span id="webConn" class="hint" style="margin:0">Not connected</span><span class="spacer"></span><button class="btn small" id="webNew" type="button">Make a new link</button></div>
               <p style="margin-top:6px">A new link stops the old one working, which is useful if it gets spammed.</p>
+              <p style="margin-top:6px">Viewers can send links while this page is closed. Next time you open it, anything sent in the last 12 hours lands in Requests for you to approve.</p>
             </div>
           </div>
           <div>
@@ -827,7 +828,10 @@ function command(rest, user){
 
 /* ---------- Website submissions (relayed through ntfy.sh) ---------- */
 const NTFY = 'https://ntfy.sh/';
-const web = {es:null, lastId:'', retry:null, run:0, sentOpen:null};
+const web = {es:null, retry:null, run:0, sentOpen:null, connectedAt:0, caughtUp:0};
+/* Remember the newest submission seen, so reopening the page collects anything sent while it was closed (ntfy.sh keeps messages for 12 hours). */
+let webSeen = store.get('webSeen', {time:0, ids:[]});
+const saveSeen = () => store.set('webSeen', webSeen);
 let requests = store.get('requests', []);
 const saveReq = () => store.set('requests', requests);
 function newRoom(){
@@ -845,8 +849,10 @@ function webStart(){
   webStop();
   if (!settings.web) return;
   if (!settings.webRoom) { settings.webRoom = newRoom(); save(); }
+  if (!webSeen.time) { webSeen.time = Math.floor(Date.now() / 1000); saveSeen(); }
   const run = ++web.run;
-  const since = web.lastId ? '?since=' + encodeURIComponent(web.lastId) : '';
+  const since = webSeen.time ? '?since=' + Math.max(0, webSeen.time - 1) : '';
+  web.connectedAt = Math.floor(Date.now() / 1000); web.caughtUp = 0;
   webSetConn('Connecting…');
   let es; try { es = new EventSource(NTFY + settings.webRoom + '/sse' + since); } catch { webSetConn('Could not connect'); return; }
   web.es = es;
@@ -855,9 +861,13 @@ function webStart(){
     if (run !== web.run) return;
     let d; try { d = JSON.parse(e.data); } catch { return; }
     if (d.event !== 'message') return;
-    web.lastId = d.id;
+    if (webSeen.ids.includes(d.id)) return;
+    webSeen.ids = [...webSeen.ids, d.id].slice(-60);
+    webSeen.time = Math.max(webSeen.time, +d.time || 0); saveSeen();
     let m; try { m = JSON.parse(d.message); } catch { return; }
-    webReceive(m);
+    const offline = (+d.time || 0) < web.connectedAt - 5;
+    webReceive(m, offline);
+    if (offline) { clearTimeout(web.caughtTimer); web.caughtTimer = setTimeout(() => { if (web.caughtUp) log(`${web.caughtUp} link${web.caughtUp === 1 ? ' was' : 's were'} sent while you were away. They're in Requests.`, 'ok'); web.caughtUp = 0; }, 1500); }
   };
   es.onerror = () => {
     if (run !== web.run) return;
@@ -870,14 +880,14 @@ function webStop(){
   if (web.es) { web.es.close(); web.es = null; }
   webSetConn('Not connected');
 }
-function webReceive(m){
+function webReceive(m, offline = false){
   if (!m || m.v !== 1 || typeof m.url !== 'string') return;
   const name = String(m.name || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 25) || 'Anonymous';
   const uid = 'web:' + String(m.uid || '').replace(/[^\w-]/g, '').slice(0, 32);
   const link = parseLink(m.url.slice(0, 500));
   if (!link) { log(`${name} (web): not a supported link`, 'no'); return; }
-  if (!settings.open) { log(`${name} (web): queue is closed`, 'no'); return; }
-  if (settings.webReview) {
+  if (!offline && !settings.open) { log(`${name} (web): queue is closed`, 'no'); return; }
+  if (settings.webReview || offline) {
     const key = keyOf(link);
     if (requests.some(r => r.key === key) || queue.some(q => q.key === key) || (current && current.key === key)) { log(`${name} (web): skipped, already waiting`, 'no'); return; }
     if (!settings.allowRepeats && history.some(h => h.key === key)) { log(`${name} (web): skipped, already played`, 'no'); return; }
@@ -886,6 +896,7 @@ function webReceive(m){
     const req = {...link, key, user:name, uid, title: defaultTitle(link), added: Date.now()};
     requests.push(req);
     saveReq(); render(); fetchMeta(req);
+    if (offline) { web.caughtUp++; return; }
     log(`${name} (web) sent ${PLATFORMS[link.platform].label} for review`, 'ok');
   } else {
     const why = addLink(link, name, {source:'Website', uid});
@@ -924,8 +935,9 @@ function webStatusSync(force){
   web.sentOpen = open;
   fetch(NTFY + settings.webRoom + '_status', {method:'POST', body: JSON.stringify({v:1, open, ch: settings.channel || yt.label || ''})}).catch(() => {});
 }
+setInterval(() => webStatusSync(true), 10 * 60 * 1000);
 window.addEventListener('pagehide', () => {
-  if (settings.web && settings.webRoom) try { navigator.sendBeacon(NTFY + settings.webRoom + '_status', JSON.stringify({v:1, open:false, offline:true})); } catch {}
+  if (settings.web && settings.webRoom) try { navigator.sendBeacon(NTFY + settings.webRoom + '_status', JSON.stringify({v:1, open:false, offline:true, taking: !!settings.open, ch: settings.channel || yt.label || ''})); } catch {}
 });
 function webUI(){
   $('#setWeb').checked = settings.web;
@@ -945,7 +957,7 @@ $('#webNew').addEventListener('click', e => {
   if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Click again to confirm'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'Make a new link'; }, 3000); return; }
   delete b.dataset.armed; b.textContent = 'Make a new link';
   if (settings.webRoom) fetch(NTFY + settings.webRoom + '_status', {method:'POST', body: JSON.stringify({v:1, open:false, off:true})}).catch(() => {});
-  settings.webRoom = newRoom(); web.lastId = ''; save(); webStart(); webUI();
+  settings.webRoom = newRoom(); webSeen = {time: Math.floor(Date.now() / 1000), ids: []}; saveSeen(); save(); webStart(); webUI();
   log('Made a new submission link. The old one no longer works.', 'ok');
 });
 $('#webCopy').addEventListener('click', () => {
