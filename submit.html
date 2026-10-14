@@ -195,6 +195,7 @@ $('#form').addEventListener('submit', async e => {
     const r = await sendLink(link.url, name);
     if (r.status === 429) { say('Too many links sent from your network. Wait a few minutes and try again.', 'no'); b.disabled = false; b.textContent = 'Send to queue'; return; }
     if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (FB) fetch(NTFY + room + '_ping', {method:'POST', body:'1'}).catch(() => {});
     say(isOpen === 'away'
       ? `Sent${name ? '' : ' anonymously'}. The streamer is offline, so it'll be waiting for them next stream (links are kept for ${KEEP}).`
       : `Sent${name ? '' : ' anonymously'}. Thanks! It'll show up for the streamer in a moment.`, 'ok');

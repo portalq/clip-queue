@@ -865,9 +865,11 @@ function webStartFB(run){
   if (!webSeen.tIso) { webSeen.tIso = new Date().toISOString(); saveSeen(); }
   const oldest = new Date(Date.now() - KEEP_DAYS * 864e5).toISOString();
   if (webSeen.tIso < oldest) webSeen.tIso = oldest;
-  let warned = false;
+  let warned = false, busy = false, again = false;
   const poll = async () => {
     if (run !== web.run) return;
+    if (busy) { again = true; return; }
+    busy = true; clearTimeout(web.retry);
     try {
       const r = await fetch(`${fbDocs()}/rooms/${settings.webRoom}:runQuery?key=${encodeURIComponent(FB.firebaseApiKey)}`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({structuredQuery:{
         from:[{collectionId:'subs'}],
@@ -896,8 +898,18 @@ function webStartFB(run){
       webSetConn('Connection problem, retrying…');
       if (!warned) { log('Website submissions: ' + e.message, 'no'); warned = true; }
     }
-    web.retry = setTimeout(poll, 10000);
+    busy = false;
+    if (run !== web.run) return;
+    if (again) { again = false; poll(); return; }
+    web.retry = setTimeout(poll, 30000);
   };
+  /* The submit page sends a free nudge through ntfy.sh after saving a link, so we check straight away
+     instead of waiting for the 30-second backup check. */
+  try {
+    const ping = new EventSource(NTFY + settings.webRoom + '_ping/sse');
+    ping.onmessage = e => { if (run !== web.run) return; try { if (JSON.parse(e.data).event === 'message') setTimeout(poll, 300); } catch {} };
+    web.ping = ping;
+  } catch {}
   poll();
 }
 function webStart(){
@@ -934,6 +946,7 @@ function webStart(){
 function webStop(){
   web.run++; clearTimeout(web.retry);
   if (web.es) { web.es.close(); web.es = null; }
+  if (web.ping) { web.ping.close(); web.ping = null; }
   webSetConn('Not connected');
 }
 function webReceive(m, offline = false){
