@@ -70,6 +70,8 @@ a.btn{text-decoration:none;color:var(--fg)}
 .thumb.noimg .badge{display:none}
 .c-youtube{color:var(--yt)} .c-twitch{color:var(--twitch)} .c-tiktok{color:var(--tiktok)} .c-instagram{color:var(--ig)} .c-twitter{color:var(--x)} .c-streamable{color:var(--str)}
 .hint{color:var(--muted);margin:0;font-size:13px}
+.log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font:12px/1.5 var(--mono);color:var(--muted)}
+.log .ok{color:var(--ok)} .log .no{color:#f0a6a8}
 .msg{margin:0;font-size:13px}
 .msg.no{color:#f0a6a8} .msg.ok{color:var(--ok)}
 .bad{background:#231e12;border:1px solid #5a4a22;color:#efd9a3;border-radius:10px;padding:12px 14px;font-size:13px}
@@ -113,6 +115,14 @@ a.btn{text-decoration:none;color:var(--fg)}
       <p class="hint" id="queueEmpty">The queue is empty.</p>
     </section>
     <p class="msg" id="actMsg" role="status" aria-live="polite"></p>
+
+    <section class="card">
+      <h2>Queue page activity</h2>
+      <div class="status" id="twStatus"><span class="dot"></span><span id="twText">Twitch: unknown</span></div>
+      <p class="hint" id="ytText"></p>
+      <ul class="log" id="actLog"></ul>
+      <p class="hint" id="actLogEmpty">Nothing logged yet. Skipped links and their reasons show up here.</p>
+    </section>
   </div>
 </main>
 
@@ -385,6 +395,13 @@ function render(){
   $('#approveAll').hidden = !open; $('#approveAll').disabled = !state;
   $('#queueList').innerHTML = qu.map(it => row(it, `<button class="btn small" data-a="remove" data-k="${esc(it.key)}"${can}>Remove</button>`)).join('');
   $('#queueEmpty').hidden = qu.length > 0;
+  const tw = s.tw || {state: '', text: ''};
+  $('#twStatus').className = 'status ' + (!on ? '' : tw.state === 'on' ? 'on' : tw.state === 'err' ? 'off' : 'wait');
+  $('#twText').textContent = 'Twitch: ' + (tw.text || 'unknown') + (on ? '' : ' (as of when the queue page closed)');
+  $('#ytText').textContent = s.yt && !/not connected/i.test(s.yt) ? 'YouTube: ' + s.yt : '';
+  const lg = s.log || [];
+  $('#actLog').innerHTML = lg.map(l => `<li><span>${new Date(l.t).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span> <span class="${esc(l.cls)}">${esc(l.text)}</span></li>`).join('');
+  $('#actLogEmpty').hidden = lg.length > 0;
   $('#nQueue').textContent = qu.length;
 }
 document.addEventListener('click', e => {

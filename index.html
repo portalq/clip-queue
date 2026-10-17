@@ -641,11 +641,15 @@ function log(text, cls = ''){
   li.innerHTML = `<span>${t}</span> <span class="${cls}">${esc(text)}</span>`;
   const ul = $('#log'); ul.prepend(li);
   while (ul.children.length > 80) ul.lastChild.remove();
+  recentLog.unshift({t: Date.now(), text: String(text).slice(0, 200), cls});
+  recentLog.length = Math.min(recentLog.length, 25);
+  if (typeof publishState === 'function') try { publishState(); } catch {}
 }
+const recentLog = [];
 
 /* ---------- Twitch chat (anonymous, read-only) ---------- */
 let ws = null, retry = 0, retryTimer = null, wantChannel = '';
-function setStatus(state, text){ const s = $('#status'); s.className = 'status ' + state; $('#statusText').textContent = text; }
+function setStatus(state, text){ const s = $('#status'); s.className = 'status ' + state; $('#statusText').textContent = text; try { publishState(); } catch {} }
 function connect(channel){
   channel = channel.trim().toLowerCase().replace(/^#/, '').replace(/^https?:\/\/(www\.)?twitch\.tv\//, '').split(/[/?]/)[0];
   if (!channel) return;
@@ -1116,7 +1120,8 @@ function applyAct(a, away){
 }
 function modState(){
   const slim = it => it ? {key: it.key, title: it.title, user: it.user, source: it.source || '', platform: it.platform, url: it.url, thumb: it.thumb || '', id: it.id || '', kind: it.kind || ''} : null;
-  return {v:1, ch: settings.channel || '', open: !!settings.open, chat: !!settings.chatLinks, webRoom: settings.web && FB ? settings.webRoom : '', now: slim(current),
+  return {v:1, ch: settings.channel || '', open: !!settings.open, chat: !!settings.chatLinks,
+    tw: {state: $('#status').className.replace('status', '').trim(), text: $('#statusText').textContent}, yt: $('#ytStatusText').textContent, log: recentLog.slice(0, 25), webRoom: settings.web && FB ? settings.webRoom : '', now: slim(current),
     queue: queue.slice(0, 100).map(slim), requests: requests.slice(0, 200).map(slim)};
 }
 /* Tell the admin page straight away when this page closes, so it switches to saving decisions for later. */
