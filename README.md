@@ -23,6 +23,10 @@ The free allowance resets at 8am UK time. Checking every 10 seconds covers about
 
 YouTube moderators and the channel owner can use the `!cq` commands. Channel members count as "subs" for the "who can add links" setting.
 
+## Turning chat links off
+
+**Settings → Who can add links → Accept links from Twitch and YouTube chat** stops chat links entirely without closing the queue; website links still come in. The admin page has the same switch.
+
 ## Reviewing links
 
 By default, links from Twitch and YouTube chat go to the **Requests** tab first. Approve them there to add them to the queue, or reject them. Switch this off under **Settings → Who can add links → Review chat links before they join the queue** to send chat links straight to the queue.
@@ -35,7 +39,7 @@ Someone the streamer trusts can help manage the queue from their own device, wit
 2. Copy the link and send it privately to the helper. Never post it in chat: anyone with it can manage the queue.
 3. The helper opens it to see Now playing, Requests and the Queue, and can approve, reject, remove, skip, and open or close the queue.
 
-While the streamer's queue page is open, changes apply within a couple of seconds. While it's closed, the admin page still shows the last queue plus any new website submissions. Approvals, rejections and removals are saved (with an **Undo** button) and applied the next time the queue page opens. Skip and open/close only work while it's open.
+While the streamer's queue page is open, changes apply within a couple of seconds. While it's closed, the admin page still shows the last queue plus any new website submissions. Approvals, rejections and removals are saved (with an **Undo** button) and applied the next time the queue page opens. The **Chat links** and **Open/Closed** switches can be flipped either way, too. Only Skip needs the queue page to be open.
 
 If the link leaks, press **Make a new admin link** and the old one stops working.
 

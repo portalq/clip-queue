@@ -217,7 +217,8 @@ button{cursor:pointer}
               <option value="subs">Subs, VIPs and mods</option>
               <option value="mods">Mods only</option>
             </select>
-            <label class="chk" style="margin-top:6px"><input type="checkbox" id="setReviewChat"> Review chat links before they join the queue</label>
+            <label class="chk" style="margin-top:6px"><input type="checkbox" id="setChatLinks"> Accept links from Twitch and YouTube chat</label>
+            <label class="chk"><input type="checkbox" id="setReviewChat"> Review chat links before they join the queue</label>
             <p>Links from Twitch and YouTube chat wait in Requests until you approve them.</p>
           </div>
           <div>
@@ -311,7 +312,7 @@ const PLATFORMS = {
   streamable:{label:'Streamable',       chip:'STRM'}
 };
 
-const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'', web:false, webReview:true, webRoom:'', reviewChat:true, modOn:false, modRoom:'',
+const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'', web:false, webReview:true, webRoom:'', reviewChat:true, chatLinks:true, modOn:false, modRoom:'',
   platforms:Object.fromEntries(Object.keys(PLATFORMS).map(k => [k, true]))};
 const settings = Object.assign({}, defaults, store.get('settings', {}));
 settings.platforms = Object.assign({}, defaults.platforms, settings.platforms);
@@ -616,6 +617,7 @@ function render(){
   $('#histEmpty').hidden = history.length > 0; $('#histFoot').hidden = !history.length;
   $('#nQueue').textContent = queue.length; $('#nHist').textContent = history.length;
   renderRequests(); webStatusSync(); publishState();
+  $('#setChatLinks').checked = settings.chatLinks;
   $('#count').textContent = `${queue.length} queued`;
   const t = $('#tally'); t.classList.toggle('open', settings.open);
   $('#lamp').textContent = settings.open ? 'OPEN' : 'CLOSED';
@@ -700,6 +702,7 @@ function handleChat({user, text, isMod, isSubLike, source}){
   if (/^!cq\b/i.test(text)) { if (isMod) command(text.slice(3).trim(), user + tag); return; }
   const links = findLinks(text);
   if (!links.length) return;
+  if (!settings.chatLinks) { log(`${user}${tag}: skipped, chat links are turned off`, 'no'); return; }
   if (!settings.open) { log(`${user}${tag}: queue is closed`, 'no'); return; }
   if (settings.who === 'mods' && !isMod) { log(`${user}${tag}: only mods can add links`, 'no'); return; }
   if (settings.who === 'subs' && !isSubLike) { log(`${user}${tag}: only subs, members and mods can add links`, 'no'); return; }
@@ -1085,7 +1088,7 @@ function modLink(){
    Skip and open/close only make sense live, so those expire after 10 minutes. */
 function applyAct(a, away){
   const age = Date.now() - (+a.t || 0);
-  if (['skip', 'open', 'close'].includes(a.action) ? Math.abs(age) > 10 * 60e3 : age > 200 * 864e5) return null;
+  if (a.action === 'skip' ? Math.abs(age) > 10 * 60e3 : age > 200 * 864e5) return null;
   if (!a.n || modSeen.nonces.includes(a.n)) return null;
   modSeen.nonces = [...modSeen.nonces, a.n].slice(-1000); saveModSeen();
   const who = String(a.name || 'Admin').replace(/[\u0000-\u001f]/g, '').slice(0, 25) + ' (admin)';
@@ -1104,14 +1107,16 @@ function applyAct(a, away){
       if (!queue.some(q => q.key === a.key)) return null;
       log(`${who} removed ${label(a.key)} from the queue${when}`); queue = queue.filter(q => q.key !== a.key); save(); render(); return 'removed';
     case 'skip': if (current && current.key === a.key) { log(`${who} skipped the current video`); playNext(); } return null;
-    case 'open': settings.open = true; save(); render(); log(`${who} opened the queue`, 'ok'); return null;
-    case 'close': settings.open = false; save(); render(); log(`${who} closed the queue`, 'no'); return null;
+    case 'open': settings.open = true; save(); render(); log(`${who} opened the queue${when}`, 'ok'); return null;
+    case 'close': settings.open = false; save(); render(); log(`${who} closed the queue${when}`, 'no'); return null;
+    case 'chatOn': settings.chatLinks = true; save(); render(); log(`${who} turned chat links on${when}`, 'ok'); return null;
+    case 'chatOff': settings.chatLinks = false; save(); render(); log(`${who} turned chat links off${when}`, 'no'); return null;
   }
   return null;
 }
 function modState(){
   const slim = it => it ? {key: it.key, title: it.title, user: it.user, source: it.source || '', platform: it.platform, url: it.url, thumb: it.thumb || '', id: it.id || '', kind: it.kind || ''} : null;
-  return {v:1, ch: settings.channel || '', open: !!settings.open, webRoom: settings.web && FB ? settings.webRoom : '', now: slim(current),
+  return {v:1, ch: settings.channel || '', open: !!settings.open, chat: !!settings.chatLinks, webRoom: settings.web && FB ? settings.webRoom : '', now: slim(current),
     queue: queue.slice(0, 100).map(slim), requests: requests.slice(0, 200).map(slim)};
 }
 /* Tell the admin page straight away when this page closes, so it switches to saving decisions for later. */
@@ -1122,7 +1127,7 @@ window.addEventListener('pagehide', () => {
 function publishState(force = false){
   if (!settings.modOn || !FB || !settings.modRoom) return;
   clearTimeout(mod.pubTimer);
-  mod.pubTimer = setTimeout(async () => {
+  const run = async () => {
     const st = modState();
     const sig = JSON.stringify(st);
     if (!force && sig === mod.last) return;
@@ -1139,9 +1144,19 @@ function publishState(force = false){
       if (!mod.warned) { log('Admin link: ' + e.message, 'no'); mod.warned = true; }
       mod.last = ''; setTimeout(() => publishState(), 15000);
     }
-  }, force ? 0 : 600);
+  };
+  if (force) run(); else mod.pubTimer = setTimeout(run, 600);
 }
-setInterval(() => publishState(true), 60 * 1000);
+/* Browsers slow timers right down in minimised windows, which made the admin page think this page had closed.
+   A worker's timer keeps ticking, so check-ins carry on every 30 seconds. */
+(() => {
+  const beat = () => publishState(true);
+  try {
+    const w = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 30000)'], {type: 'text/javascript'})));
+    w.onmessage = beat;
+  } catch { setInterval(beat, 30000); }
+  document.addEventListener('visibilitychange', beat);
+})();
 function modStart(){
   modStop();
   if (!settings.modOn) return;
@@ -1266,6 +1281,8 @@ $('#setAutoYT').checked = settings.autoNextYT;
 $('#setAutoYT').addEventListener('change', e => { settings.autoNextYT = e.target.checked; save(); });
 $('#setIgCrop').checked = settings.igCrop;
 $('#setIgCrop').addEventListener('change', e => { settings.igCrop = e.target.checked; save(); if (current && current.platform === 'instagram') renderPlayer(); });
+$('#setChatLinks').checked = settings.chatLinks;
+$('#setChatLinks').addEventListener('change', e => { settings.chatLinks = e.target.checked; save(); render(); });
 $('#setReviewChat').checked = settings.reviewChat;
 $('#setReviewChat').addEventListener('change', e => { settings.reviewChat = e.target.checked; save(); render(); });
 $('#setYtKey').value = settings.ytKey;

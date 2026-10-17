@@ -49,6 +49,9 @@ a.btn{text-decoration:none;color:var(--fg)}
 .tally{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:999px;padding:5px 14px 5px 6px;background:var(--raised);font-weight:600;cursor:pointer}
 .lamp{font:500 11px/1 var(--mono);letter-spacing:.08em;padding:5px 8px;border-radius:999px;background:#3a3f4b;color:var(--muted)}
 .tally.open .lamp{background:var(--live);color:#fff}
+.tally.on .lamp{background:var(--ok);color:#06210f}
+.tally:disabled{opacity:.5;cursor:default}
+.toggles{display:flex;gap:8px;flex-wrap:wrap}
 .list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .item{display:grid;grid-template-columns:96px minmax(0,1fr) auto;align-items:center;gap:12px;padding:8px;border-radius:8px;background:var(--raised)}
 .item.busy{opacity:.5}
@@ -86,7 +89,10 @@ a.btn{text-decoration:none;color:var(--fg)}
   <div id="panel" style="display:flex;flex-direction:column;gap:18px">
     <div class="row-end">
       <div class="status" id="liveStatus"><span class="dot"></span><span id="liveText">Checking the queue…</span></div>
-      <button class="tally" id="tally" type="button" title="Open or close the queue to new links"><span class="lamp" id="lamp">…</span><span id="tallyText"></span></button>
+      <div class="toggles">
+        <button class="tally" id="chatTally" type="button" title="Let links from Twitch and YouTube chat into Requests, or keep them out"><span class="lamp" id="chatLamp">…</span><span id="chatText"></span></button>
+        <button class="tally" id="tally" type="button" title="Open or close the queue to new links"><span class="lamp" id="lamp">…</span><span id="tallyText"></span></button>
+      </div>
     </div>
 
     <section class="card">
@@ -194,7 +200,8 @@ function defaultTitle(it){
 const keyOf = it => it.platform + ':' + (it.id || it.url);
 
 let state = null;
-let want = null;   // open/close the admin asked for, shown straight away until the queue page confirms it
+let want = {open: null, chat: null};   // switches the admin flipped, shown straight away until the queue page confirms
+let setPend = {};                        // switches flipped while the queue page is closed; applied when it opens
 let decided = new Map();   // key -> {action, n}: decisions saved while the queue page is closed
 let fresh = [];            // website links sent since the queue page last shared its queue
 const pending = new Set();
@@ -218,18 +225,19 @@ async function loadState(){
     const r = await fetch(fbUrl(`rooms/${room}/state/main`));
     if (r.status === 404) state = null;
     else if (r.ok) { const j = await r.json(); state = JSON.parse(j.fields.json.stringValue); }
-    if (state && Date.now() - (state.ts || 0) < 150 * 1000) state.closed = await closedSince(state.ts);
+    if (state && Date.now() - (state.ts || 0) < STALE) state.closed = await closedSince(state.ts);
     if (state) await loadAway(); else { decided = new Map(); fresh = []; }
     watchWeb();
   } catch {}
   polling = false;
-  if (want && state && state.open === want.open) want = null;
+  if (want.open && state && state.open === want.open.val) want.open = null;
+  if (want.chat && state && chatOn() === want.chat.val) want.chat = null;
   render();
   if (reload) { reload = false; loadState(); }
 }
 /* While the queue page is closed: collect decisions already made, and website links it hasn't picked up yet. */
 async function loadAway(){
-  if (online()) { decided = new Map(); fresh = []; return; }
+  if (online()) { decided = new Map(); fresh = []; setPend = {}; return; }
   const iso = new Date((state.ts || 0) - 2000).toISOString();
   const acts = await since(`rooms/${room}`, 'acts', iso, 300);
   const list = acts.map(d => { try { return JSON.parse(d.fields.body.stringValue); } catch { return null; } }).filter(Boolean);
@@ -237,6 +245,11 @@ async function loadAway(){
   const m = new Map();
   for (const a of list) if (['approve', 'reject', 'remove'].includes(a.action) && !undone.has(a.n)) m.set(a.key, {action: a.action, n: a.n});
   decided = m;
+  setPend = {};
+  for (const a of list) {
+    if (a.action === 'open' || a.action === 'close') setPend.open = a.action === 'open';
+    if (a.action === 'chatOn' || a.action === 'chatOff') setPend.chat = a.action === 'chatOn';
+  }
   fresh = [];
   if (state.webRoom) {
     const known = new Set([...(state.requests || []), ...(state.queue || [])].map(x => x.key));
@@ -260,7 +273,10 @@ async function closedSince(ts){
   } catch { return false; }
 }
 /* The queue page checks in every minute and says when it closes. */
-const online = () => !!(state && !state.closed && Date.now() - (state.ts || 0) < 150 * 1000);
+/* A minimised window can delay the queue page's check-ins, so allow 5 minutes before calling it closed. */
+const STALE = 5 * 60 * 1000;
+const online = () => !!(state && !state.closed && Date.now() - (state.ts || 0) < STALE);
+const chatOn = () => !(state && state.chat === false);
 /* Refresh as soon as a viewer sends a link from the website. */
 let webWatched = '';
 function watchWeb(){
@@ -280,7 +296,7 @@ async function send(body){
 }
 async function act(action, key){
   const live = online();
-  if (!state || (!live && !['approve', 'reject', 'remove', 'undo', 'approveAll'].includes(action))) return;
+  if (!state || (!live && action === 'skip')) return;
   const id = action + ':' + (key || '');
   if (pending.has(id)) return;
   pending.add(id); render();
@@ -293,7 +309,9 @@ async function act(action, key){
     } else {
       const n = nonce();
       await send({action, key: key || '', name, t: Date.now(), n});
-      if (!live) decided.set(key, {action, n});
+      if (!live && key) decided.set(key, {action, n});
+      if (!live && (action === 'open' || action === 'close')) setPend.open = action === 'open';
+      if (!live && (action === 'chatOn' || action === 'chatOff')) setPend.chat = action === 'chatOn';
     }
     if (live) fetch(NTFY + room + '_act', {method:'POST', body:'1'}).catch(() => {});
     actMsg('');
@@ -329,14 +347,24 @@ function render(){
   $('#liveStatus').className = 'status ' + (!state ? 'wait' : on ? 'on' : 'off');
   $('#liveText').textContent = !state ? "Waiting for the streamer's queue page to share the queue"
     : on ? "Live: the streamer's queue page is open"
-    : "The streamer's queue page is closed. Approvals, rejections and removals are saved and applied when it opens.";
+    : "The streamer's queue page is closed. Your changes are saved and applied when it opens. Skip only works while it's open.";
   const s = state || {requests: [], queue: [], now: null, open: false};
-  if (want && Date.now() > want.until) { want = null; actMsg("The queue page didn't respond. Try again.", 'no'); }
-  const isOpen = want ? want.open : !!s.open;
+  for (const k of ['open', 'chat']) if (want[k] && Date.now() > want[k].until) { want[k] = null; actMsg("The queue page didn't respond. Try again.", 'no'); }
+  const later = on ? '' : ' when it opens';
+  const isOpen = want.open ? want.open.val : 'open' in setPend ? setPend.open : !!s.open;
   $('#tally').classList.toggle('open', isOpen);
   $('#lamp').textContent = isOpen ? 'OPEN' : 'CLOSED';
-  $('#tallyText').textContent = want ? (want.open ? 'Opening…' : 'Closing…') : isOpen ? 'Taking links' : 'Not taking links';
-  $('#tally').disabled = !on;
+  $('#tallyText').textContent = want.open ? (want.open.val ? 'Opening…' : 'Closing…')
+    : !on && 'open' in setPend && setPend.open !== !!s.open ? (isOpen ? 'Opens' : 'Closes') + later
+    : isOpen ? 'Taking links' : 'Not taking links';
+  $('#tally').disabled = !state;
+  const isChat = want.chat ? want.chat.val : 'chat' in setPend ? setPend.chat : chatOn();
+  $('#chatTally').classList.toggle('on', isChat);
+  $('#chatLamp').textContent = isChat ? 'ON' : 'OFF';
+  $('#chatText').textContent = want.chat ? (want.chat.val ? 'Allowing chat links…' : 'Blocking chat links…')
+    : !on && 'chat' in setPend && setPend.chat !== chatOn() ? (isChat ? 'Chat links on' : 'Chat links off') + later
+    : isChat ? 'Chat links allowed' : 'Chat links blocked';
+  $('#chatTally').disabled = !state;
   const live = on ? '' : ' disabled', can = state ? '' : ' disabled';
   $('#nowList').innerHTML = s.now ? row(s.now, `<button class="btn small" data-a="skip" data-k="${esc(s.now.key)}"${live}>Skip</button>`) : '';
   $('#nowEmpty').hidden = !!s.now;
@@ -356,13 +384,18 @@ document.addEventListener('click', e => {
   act(b.dataset.a, b.dataset.k);
 });
 $('#approveAll').addEventListener('click', () => act('approveAll'));
-$('#tally').addEventListener('click', () => {
-  if (!state || !online()) return;
-  const shown = want ? want.open : state.open;
-  want = {open: !shown, until: Date.now() + 20000};
-  act(want.open ? 'open' : 'close');
+function flip(k){
+  if (!state) return;
+  const shown = k === 'open'
+    ? (want.open ? want.open.val : 'open' in setPend ? setPend.open : !!state.open)
+    : (want.chat ? want.chat.val : 'chat' in setPend ? setPend.chat : chatOn());
+  const val = !shown;
+  if (online()) want[k] = {val, until: Date.now() + 20000};
+  act(k === 'open' ? (val ? 'open' : 'close') : (val ? 'chatOn' : 'chatOff'));
   render();
-});
+}
+$('#tally').addEventListener('click', () => flip('open'));
+$('#chatTally').addEventListener('click', () => flip('chat'));
 
 /* ---------- start ---------- */
 if (!room) { $('#badLink').hidden = false; $('#panel').hidden = true; }
