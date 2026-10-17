@@ -1136,8 +1136,10 @@ function publishState(force = false){
       const r = await fetch(fbUrl(`rooms/${settings.modRoom}/state/main`), {method:'PATCH', headers:{'content-type':'application/json'},
         body: JSON.stringify({fields:{json:{stringValue: JSON.stringify(st)}, t:{timestampValue: new Date().toISOString()}}})});
       if (!r.ok) { const j = await r.json().catch(() => null); throw new Error(fbExplain(r.status, j)); }
+      const changed = sig !== mod.last || mod.needPing;
       mod.last = sig;
-      fetch(NTFY + settings.modRoom + '_state', {method:'POST', body:'1'}).catch(() => {});
+      /* Ping only on real changes (and once after opening), so the newest note on this topic says whether the page is open. */
+      if (changed) { mod.needPing = false; fetch(NTFY + settings.modRoom + '_state', {method:'POST', body:'1'}).catch(() => {}); }
       modSetConn('Admin link is live');
     } catch (e) {
       modSetConn("Couldn't share the queue, retrying…");
@@ -1215,7 +1217,7 @@ function modStart(){
     p.onmessage = e => { if (run !== mod.run) return; try { if (JSON.parse(e.data).event === 'message') poll(); } catch {} };
     mod.ping = p;
   } catch {}
-  poll(); publishState(true);
+  poll(); mod.needPing = true; publishState(true);
 }
 function modStop(){ mod.run++; clearTimeout(mod.timer); if (mod.ping) { mod.ping.close(); mod.ping = null; } }
 function modUI(){

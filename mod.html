@@ -224,8 +224,13 @@ async function loadState(){
   try {
     const r = await fetch(fbUrl(`rooms/${room}/state/main`));
     if (r.status === 404) state = null;
-    else if (r.ok) { const j = await r.json(); state = JSON.parse(j.fields.json.stringValue); }
-    if (state && Date.now() - (state.ts || 0) < STALE) state.closed = await closedSince(state.ts);
+    else if (r.ok) {
+      const j = await r.json();
+      state = JSON.parse(j.fields.json.stringValue);
+      /* Use the database's own clock for when the queue page last checked in, not the streamer's computer clock. */
+      state.at = Date.parse(j.updateTime) || state.ts || 0;
+    }
+    if (state && Date.now() - state.at < STALE) state.closed = await closedSince();
     if (state) await loadAway(); else { decided = new Map(); fresh = []; }
     watchWeb();
   } catch {}
@@ -238,7 +243,7 @@ async function loadState(){
 /* While the queue page is closed: collect decisions already made, and website links it hasn't picked up yet. */
 async function loadAway(){
   if (online()) { decided = new Map(); fresh = []; setPend = {}; return; }
-  const iso = new Date((state.ts || 0) - 2000).toISOString();
+  const iso = new Date(state.at - 2 * 60e3).toISOString();
   const acts = await since(`rooms/${room}`, 'acts', iso, 300);
   const list = acts.map(d => { try { return JSON.parse(d.fields.body.stringValue); } catch { return null; } }).filter(Boolean);
   const undone = new Set(list.filter(a => a.action === 'undo').map(a => a.ref));
@@ -265,17 +270,20 @@ async function loadAway(){
   }
 }
 /* The queue page sends a "closed" note through ntfy.sh as it closes (it can't update the database at that moment). */
-async function closedSince(ts){
+/* The newest note decides: "closed" means it closed, anything else means it has opened again since. */
+async function closedSince(){
   try {
-    const r = await fetch(NTFY + room + '_state/json?poll=1&since=15m');
+    const r = await fetch(NTFY + room + '_state/json?poll=1&since=1h');
     const lines = (await r.text()).trim().split('\n').filter(Boolean);
-    return lines.some(l => { try { const d = JSON.parse(l); return d.event === 'message' && d.message === 'closed' && d.time * 1000 > ts - 3000; } catch { return false; } });
+    let last = '';
+    for (const l of lines) { try { const d = JSON.parse(l); if (d.event === 'message') last = d.message; } catch {} }
+    return last === 'closed';
   } catch { return false; }
 }
 /* The queue page checks in every minute and says when it closes. */
 /* A minimised window can delay the queue page's check-ins, so allow 5 minutes before calling it closed. */
 const STALE = 5 * 60 * 1000;
-const online = () => !!(state && !state.closed && Date.now() - (state.ts || 0) < STALE);
+const online = () => !!(state && !state.closed && Date.now() - (state.at || 0) < STALE);
 const chatOn = () => !(state && state.chat === false);
 /* Refresh as soon as a viewer sends a link from the website. */
 let webWatched = '';
