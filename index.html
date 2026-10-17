@@ -300,7 +300,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const store = {
   get(k, d){ try { const v = localStorage.getItem('cq:'+k); return v ? JSON.parse(v) : d; } catch { return d; } },
-  set(k, v){ try { localStorage.setItem('cq:'+k, JSON.stringify(v)); } catch {} }
+  set(k, v){ if (window.__cqPaused) return; try { localStorage.setItem('cq:'+k, JSON.stringify(v)); } catch {} }
 };
 
 const PLATFORMS = {
@@ -1043,7 +1043,7 @@ function webStatusSync(force){
 }
 setInterval(() => webStatusSync(true), 10 * 60 * 1000);
 window.addEventListener('pagehide', () => {
-  if (settings.web && settings.webRoom) try { navigator.sendBeacon(NTFY + settings.webRoom + '_status', JSON.stringify({v:1, open:false, offline:true, taking: !!settings.open, ch: settings.channel || yt.label || ''})); } catch {}
+  if (!window.__cqPaused && settings.web && settings.webRoom) try { navigator.sendBeacon(NTFY + settings.webRoom + '_status', JSON.stringify({v:1, open:false, offline:true, taking: !!settings.open, ch: settings.channel || yt.label || ''})); } catch {}
 });
 function webUI(){
   $('#webAwayNote').textContent = `Viewers can send links while this page is closed. Next time you open it, anything sent in the last ${FB ? '190 days' : '12 hours'} lands in Requests for you to approve.`;
@@ -1126,10 +1126,11 @@ function modState(){
 }
 /* Tell the admin page straight away when this page closes, so it switches to saving decisions for later. */
 window.addEventListener('pagehide', () => {
-  if (!settings.modOn || !FB || !settings.modRoom) return;
+  if (window.__cqPaused || !settings.modOn || !FB || !settings.modRoom) return;
   try { navigator.sendBeacon(NTFY + settings.modRoom + '_state', 'closed'); } catch {}
 });
 function publishState(force = false){
+  if (window.__cqPaused) return;
   if (!settings.modOn || !FB || !settings.modRoom) return;
   clearTimeout(mod.pubTimer);
   const run = async () => {
@@ -1314,6 +1315,34 @@ log('Ready. Enter a channel name and press Connect.');
 if (settings.channel) connect(settings.channel);
 webUI(); if (settings.web) webStart(); else webReadyResolve();
 modUI(); if (settings.modOn) modStart();
+
+/* ---------- Only one active tab ----------
+   Two open copies of this page in the same browser would each read chat and overwrite each other's saved settings
+   (that's how the admin link could switch itself off). The newest tab takes over; older ones pause and stop saving. */
+function pauseTab(){
+  if (window.__cqPaused) return;
+  window.__cqPaused = true;
+  try { if (ws) { ws.onclose = null; ws.close(); } clearTimeout(retryTimer); } catch {}
+  try { ytStop(); } catch {}
+  try { webStop(); } catch {}
+  try { modStop(); } catch {}
+  $('#stage').innerHTML = '';
+  const o = document.createElement('div');
+  o.setAttribute('role', 'dialog');
+  o.style.cssText = 'position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:24px;background:rgba(10,11,14,.92)';
+  o.innerHTML = `<div style="max-width:440px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;display:flex;flex-direction:column;gap:12px">
+    <h2 style="margin:0;font:700 22px/1.2 var(--display)">Open in another tab</h2>
+    <p style="margin:0;color:var(--muted)">The queue is now running in another tab, so this one has paused. Only one tab can read chat and save the queue at a time.</p>
+    <div><button class="btn primary" type="button" id="useHere">Use this tab instead</button></div></div>`;
+  document.body.appendChild(o);
+  o.querySelector('#useHere').addEventListener('click', () => location.reload());
+}
+try {
+  const bc = new BroadcastChannel('cq-queue-page');
+  const me = Math.random().toString(36).slice(2);
+  bc.onmessage = e => { if (e.data && e.data.type === 'hello' && e.data.id !== me) pauseTab(); };
+  bc.postMessage({type: 'hello', id: me});
+} catch {}
 
 window.__cq = {parseLink, findLinks};
 })();
