@@ -118,6 +118,8 @@ a.btn{text-decoration:none;color:var(--fg)}
 
     <section class="card">
       <h2>Queue page activity</h2>
+      <p class="hint" id="freshText"></p>
+      <p class="hint" id="errText" style="color:#f0a6a8" hidden></p>
       <div class="status" id="twStatus"><span class="dot"></span><span id="twText">Twitch: unknown</span></div>
       <p class="hint" id="ytText"></p>
       <ul class="log" id="actLog"></ul>
@@ -242,7 +244,7 @@ async function loadState(){
     }
     if (state && Date.now() - state.at < STALE) state.closed = await closedSince();
     if (state) await loadAway(); else { decided = new Map(); fresh = []; }
-    watchWeb();
+    watchWeb(); await loadErr();
   } catch {}
   polling = false;
   if (want.open && state && state.open === want.open.val) want.open = null;
@@ -281,6 +283,16 @@ async function loadAway(){
 }
 /* The queue page sends a "closed" note through ntfy.sh as it closes (it can't update the database at that moment). */
 /* The newest note decides: "closed" means it closed, anything else means it has opened again since. */
+let lastErr = '';
+async function loadErr(){
+  try {
+    const r = await fetch(NTFY + room + '_err/json?poll=1&since=30m');
+    const lines = (await r.text()).trim().split('\n').filter(Boolean);
+    let m = '';
+    for (const l of lines) { try { const d = JSON.parse(l); if (d.event === 'message') m = d.time * 1000 > (state && state.at || 0) ? d.message : ''; } catch {} }
+    lastErr = m;
+  } catch {}
+}
 async function closedSince(){
   try {
     const r = await fetch(NTFY + room + '_state/json?poll=1&since=1h');
@@ -395,6 +407,11 @@ function render(){
   $('#approveAll').hidden = !open; $('#approveAll').disabled = !state;
   $('#queueList').innerHTML = qu.map(it => row(it, `<button class="btn small" data-a="remove" data-k="${esc(it.key)}"${can}>Remove</button>`)).join('');
   $('#queueEmpty').hidden = qu.length > 0;
+  if (state && state.at) {
+    const sec = Math.max(0, Math.round((Date.now() - state.at) / 1000));
+    $('#freshText').textContent = 'Last update from the queue page: ' + (sec < 60 ? sec + 's ago' : sec < 3600 ? Math.round(sec / 60) + ' min ago' : new Date(state.at).toLocaleString());
+  }
+  $('#errText').hidden = !lastErr; $('#errText').textContent = lastErr ? 'Queue page reported a problem: ' + lastErr : '';
   const tw = s.tw || {state: '', text: ''};
   $('#twStatus').className = 'status ' + (!on ? '' : tw.state === 'on' ? 'on' : tw.state === 'err' ? 'off' : 'wait');
   $('#twText').textContent = 'Twitch: ' + (tw.text || 'unknown') + (on ? '' : ' (as of when the queue page closed)');
@@ -428,7 +445,7 @@ else if (!FBOK) { $('#noSetup').hidden = false; $('#panel').hidden = true; }
 else {
   render(); loadState();
   setInterval(loadState, 20000);
-  setInterval(render, 30000);
+  setInterval(render, 5000);
   try {
     const es = new EventSource(NTFY + room + '_state/sse');
     es.onmessage = e => { try { if (JSON.parse(e.data).event === 'message') loadState(); } catch {} };

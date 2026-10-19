@@ -1129,41 +1129,61 @@ window.addEventListener('pagehide', () => {
   if (window.__cqPaused || !settings.modOn || !FB || !settings.modRoom) return;
   try { navigator.sendBeacon(NTFY + settings.modRoom + '_state', 'closed'); } catch {}
 });
+/* Sending the queue to the admin page.
+   - only one request at a time, each cut off after 15 seconds, so a stuck request can't block the ones after it
+   - changes go out at most 0.6s later; a busy page can't keep postponing them
+   - two independent check-in timers, so if the browser stalls one the other keeps going
+   - failures are shown in Settings, and sent to the admin page so they're visible there too */
 function publishState(force = false){
   if (window.__cqPaused) return;
   if (!settings.modOn || !FB || !settings.modRoom) return;
-  clearTimeout(mod.pubTimer);
-  const run = async () => {
-    const st = modState();
-    const sig = JSON.stringify(st);
-    if (!force && sig === mod.last) return;
-    st.ts = Date.now();
-    try {
-      const r = await fetch(fbUrl(`rooms/${settings.modRoom}/state/main`), {method:'PATCH', headers:{'content-type':'application/json'},
-        body: JSON.stringify({fields:{json:{stringValue: JSON.stringify(st)}, t:{timestampValue: new Date().toISOString()}}})});
-      if (!r.ok) { const j = await r.json().catch(() => null); throw new Error(fbExplain(r.status, j)); }
-      const changed = sig !== mod.last || mod.needPing;
-      mod.last = sig;
-      /* Ping only on real changes (and once after opening), so the newest note on this topic says whether the page is open. */
-      if (changed) { mod.needPing = false; fetch(NTFY + settings.modRoom + '_state', {method:'POST', body:'1'}).catch(() => {}); }
-      modSetConn('Admin link is live');
-    } catch (e) {
-      modSetConn("Couldn't share the queue, retrying…");
-      if (!mod.warned) { log('Admin link: ' + e.message, 'no'); mod.warned = true; }
-      mod.last = ''; setTimeout(() => publishState(), 15000);
-    }
-  };
-  if (force) run(); else mod.pubTimer = setTimeout(run, 600);
+  if (force) mod.forceNext = true;
+  if (mod.inflight) { mod.again = true; return; }
+  if (force) { clearTimeout(mod.pubTimer); mod.pubTimer = null; sendState(); return; }
+  if (!mod.pubTimer) mod.pubTimer = setTimeout(() => { mod.pubTimer = null; sendState(); }, 600);
 }
-/* Browsers slow timers right down in minimised windows, which made the admin page think this page had closed.
-   A worker's timer keeps ticking, so check-ins carry on every 30 seconds. */
+async function sendState(){
+  if (window.__cqPaused || !settings.modOn || !FB || !settings.modRoom) return;
+  const force = mod.forceNext; mod.forceNext = false;
+  const st = modState();
+  const sig = JSON.stringify(st);
+  if (!force && sig === mod.last) return;
+  st.ts = Date.now();
+  mod.inflight = true; mod.lastTry = Date.now();
+  const ctl = new AbortController(), cut = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const r = await fetch(fbUrl(`rooms/${settings.modRoom}/state/main`), {method:'PATCH', headers:{'content-type':'application/json'}, signal: ctl.signal,
+      body: JSON.stringify({fields:{json:{stringValue: JSON.stringify(st)}, t:{timestampValue: new Date().toISOString()}}})});
+    if (!r.ok) { const j = await r.json().catch(() => null); throw new Error(fbExplain(r.status, j) + ' (HTTP ' + r.status + ')'); }
+    const changed = sig !== mod.last || mod.needPing;
+    mod.last = sig; mod.okAt = Date.now(); mod.fails = 0;
+    /* Ping only on real changes (and once after opening), so the newest note on this topic says whether the page is open. */
+    if (changed) { mod.needPing = false; fetch(NTFY + settings.modRoom + '_state', {method:'POST', body:'1'}).catch(() => {}); }
+    modSetConn('Admin link is live · last shared ' + new Date().toLocaleTimeString());
+  } catch (e) {
+    const why = e.name === 'AbortError' ? 'the database took too long to answer' : e.message;
+    mod.fails = (mod.fails || 0) + 1; mod.last = '';
+    modSetConn(`Couldn't share the queue (${why}), retrying…`);
+    if (!mod.errAt || Date.now() - mod.errAt > 60000) {
+      mod.errAt = Date.now();
+      log('Admin link: ' + why, 'no');
+      fetch(NTFY + settings.modRoom + '_err', {method:'POST', body: String(why).slice(0, 300)}).catch(() => {});
+    }
+    setTimeout(() => publishState(true), Math.min(60000, 5000 * mod.fails));
+  } finally {
+    clearTimeout(cut); mod.inflight = false;
+    if (mod.again) { mod.again = false; publishState(mod.forceNext); }
+  }
+}
 (() => {
-  const beat = () => publishState(true);
+  const beat = () => { if (!mod.lastTry || Date.now() - mod.lastTry > 20000) publishState(true); };
   try {
     const w = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 30000)'], {type: 'text/javascript'})));
     w.onmessage = beat;
-  } catch { setInterval(beat, 30000); }
+  } catch {}
+  setInterval(beat, 30000);
   document.addEventListener('visibilitychange', beat);
+  window.addEventListener('focus', beat);
 })();
 function modStart(){
   modStop();
