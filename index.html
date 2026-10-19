@@ -88,6 +88,7 @@ button{cursor:pointer}
 .tab{flex:none}
 .tab .n.hot{color:var(--accent-ink);background:var(--accent);border-radius:999px;padding:1px 6px}
 .share{display:flex;gap:8px}
+.devrow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px 6px 10px;background:var(--raised);border-radius:8px}
 .share .field{font:12px var(--mono)}
 .tab{background:none;border:0;border-bottom:2px solid transparent;padding:11px 7px 9px;color:var(--muted);font-weight:500;font-size:13px}
 .tab[aria-selected="true"]{color:var(--fg);border-color:var(--accent)}
@@ -242,10 +243,15 @@ button{cursor:pointer}
             <label class="chk"><input type="checkbox" id="setMod"> Let someone help manage the queue from their own device</label>
             <div id="modBox" hidden>
               <p id="modNote" style="margin-top:6px;color:#efd9a3" hidden></p>
-              <p style="margin-top:6px">Anyone with this link can approve, reject, remove and skip videos, so only give it to people you trust. Their changes apply while this page is open.</p>
+              <p style="margin-top:6px">Send this link to the person helping you. The first device to open it and press Claim locks it to that device; anyone else who gets the link can only ask for access.</p>
               <div class="share" style="margin-top:8px"><input class="field" id="modLink" readonly aria-label="Admin link"><button class="btn small" id="modCopy" type="button">Copy</button></div>
               <div class="inline" style="margin-top:6px"><span id="modConn" class="hint" style="margin:0">Not connected</span><span class="spacer"></span><button class="btn small" id="modNew" type="button">Make a new admin link</button></div>
               <p style="margin-top:6px">A new link stops the old one working straight away.</p>
+              <p style="margin-top:10px;font-weight:600;color:var(--fg)">Approved devices</p>
+              <p style="margin-top:2px">Only these devices can change the queue through the admin link. The first device to claim the link becomes the owner and approves any others.</p>
+              <ul class="list" id="devList" style="margin-top:6px"></ul>
+              <ul class="list" id="devReqs" style="margin-top:6px"></ul>
+              <div style="margin-top:6px"><button class="btn small" id="devReset" type="button">Reset the device lock</button></div>
             </div>
           </div>
           <div>
@@ -1081,6 +1087,30 @@ $('#channel').addEventListener('change', () => { if (settings.web) setTimeout(we
 let modSeen = store.get('modSeen', {tIso:'', ids:[], nonces:[]});
 const mod = {run:0, timer:null, ping:null, pubTimer:null, last:'', warned:false};
 const saveModSeen = () => store.set('modSeen', modSeen);
+/* Device lock: only devices in this list can change anything. The first device to claim the admin link becomes the owner;
+   it approves any others. Each device signs its actions with a private key that never leaves it. */
+let admins = store.get('admins', {});          // device id -> {name, pub, owner, since}
+let adminReqs = store.get('adminReqs', []);    // devices asking for access: {hash, name, pub, t}
+const saveAdmins = () => { store.set('admins', admins); store.set('adminReqs', adminReqs); };
+const ECDSA = {name:'ECDSA', namedCurve:'P-256'};
+const pubKeys = {};
+async function sha16(str){
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(h).slice(0, 8), b => b.toString(16).padStart(2, '0')).join('');
+}
+const b64d = str => Uint8Array.from(atob(str), c => c.charCodeAt(0));
+const cleanName = n => String(n || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 25) || 'Admin device';
+async function verifyAct(body, sig, a){
+  if (!a || !sig || !a.dev) return false;
+  try {
+    const selfSigned = a.action === 'claim' || a.action === 'request';
+    const pub = selfSigned ? String(a.pub || '') : (admins[a.dev] && admins[a.dev].pub);
+    if (!pub) return false;
+    if (selfSigned && await sha16(pub) !== a.dev) return false;
+    if (!pubKeys[pub]) pubKeys[pub] = await crypto.subtle.importKey('jwk', JSON.parse(pub), ECDSA, false, ['verify']);
+    return await crypto.subtle.verify({name:'ECDSA', hash:'SHA-256'}, pubKeys[pub], b64d(sig), new TextEncoder().encode(body));
+  } catch { return false; }
+}
 const fbUrl = path => `${fbDocs()}/${path}?key=${encodeURIComponent(FB.firebaseApiKey)}`;
 function modSetConn(t){ $('#modConn').textContent = t; }
 function modLink(){
@@ -1115,12 +1145,32 @@ function applyAct(a, away){
     case 'close': settings.open = false; save(); render(); log(`${who} closed the queue${when}`, 'no'); return null;
     case 'chatOn': settings.chatLinks = true; save(); render(); log(`${who} turned chat links on${when}`, 'ok'); return null;
     case 'chatOff': settings.chatLinks = false; save(); render(); log(`${who} turned chat links off${when}`, 'no'); return null;
+    case 'claim':
+      if (Object.keys(admins).length) { log(`Ignored a claim on the admin link from "${cleanName(a.name)}": it's already locked`, 'no'); return null; }
+      admins[a.dev] = {name: cleanName(a.name), pub: String(a.pub), owner: true, since: Date.now()}; saveAdmins(); modUI(); publishState(true);
+      log(`The admin link is now locked to ${cleanName(a.name)}'s device`, 'ok'); return null;
+    case 'request':
+      if (admins[a.dev] || adminReqs.some(q => q.hash === a.dev) || adminReqs.length >= 10) return null;
+      adminReqs.push({hash: a.dev, name: cleanName(a.name), pub: String(a.pub), t: Date.now()}); saveAdmins(); modUI(); publishState(true);
+      log(`"${cleanName(a.name)}" asked for access to the admin link`); return null;
+    case 'approveDevice': case 'denyDevice': case 'removeDevice': {
+      if (!admins[a.dev] || !admins[a.dev].owner) return null;
+      if (a.action === 'removeDevice') { if (a.target !== a.dev && admins[a.target]) { log(`${who} removed ${admins[a.target].name}'s device`); delete admins[a.target]; } }
+      else {
+        const q = adminReqs.find(x => x.hash === a.target);
+        adminReqs = adminReqs.filter(x => x.hash !== a.target);
+        if (q && a.action === 'approveDevice') { admins[q.hash] = {name: q.name, pub: q.pub, owner: false, since: Date.now()}; log(`${who} approved ${q.name}'s device`, 'ok'); }
+        else if (q) log(`${who} turned down ${q.name}'s device`);
+      }
+      saveAdmins(); modUI(); publishState(true); return null;
+    }
   }
   return null;
 }
 function modState(){
   const slim = it => it ? {key: it.key, title: it.title, user: it.user, source: it.source || '', platform: it.platform, url: it.url, thumb: it.thumb || '', id: it.id || '', kind: it.kind || ''} : null;
-  return {v:1, ch: settings.channel || '', open: !!settings.open, chat: !!settings.chatLinks,
+  return {v:1, ch: settings.channel || '', open: !!settings.open, chat: !!settings.chatLinks, locked: true,
+    admins: Object.entries(admins).map(([h, d]) => ({hash: h, name: d.name, owner: !!d.owner})), adminReqs: adminReqs.map(q => ({hash: q.hash, name: q.name})),
     tw: {state: $('#status').className.replace('status', '').trim(), text: $('#statusText').textContent}, yt: $('#ytStatusText').textContent, log: recentLog.slice(0, 25), webRoom: settings.web && FB ? settings.webRoom : '', now: slim(current),
     queue: queue.slice(0, 100).map(slim), requests: requests.slice(0, 200).map(slim)};
 }
@@ -1212,8 +1262,15 @@ function modStart(){
         const id = d.name.split('/').pop();
         if (modSeen.ids.includes(id)) continue;
         const f = d.fields || {};
-        let a = null; try { a = JSON.parse((f.body && f.body.stringValue) || ''); } catch {}
-        rows.push({id, tIso: (f.t && f.t.timestampValue) || d.createTime, a});
+        const body = (f.body && f.body.stringValue) || '';
+        let a = null; try { a = JSON.parse(body); } catch {}
+        rows.push({id, tIso: (f.t && f.t.timestampValue) || d.createTime, a, body, sig: (f.sig && f.sig.stringValue) || ''});
+      }
+      for (const x of rows) {
+        if (x.a && !(await verifyAct(x.body, x.sig, x.a))) {
+          if (!mod.rejAt || Date.now() - mod.rejAt > 60000) { mod.rejAt = Date.now(); log('Ignored a change from a device that isn\'t approved for the admin link', 'no'); }
+          x.a = null;
+        }
       }
       const undone = new Set(rows.filter(x => x.a && x.a.action === 'undo').map(x => x.a.ref));
       const tally = {approved:0, rejected:0, removed:0};
@@ -1252,13 +1309,39 @@ function modUI(){
   if (settings.modOn && settings.modRoom) $('#modLink').value = modLink();
   const note = FB ? '' : 'This needs the Firebase database set up in config.js.';
   $('#modNote').textContent = note; $('#modNote').hidden = !note;
+  const devs = Object.entries(admins);
+  $('#devList').innerHTML = devs.length
+    ? devs.map(([h, d]) => `<li class="devrow"><span>${esc(d.name)}${d.owner ? ' <span class="src">· owner</span>' : ''}</span><button class="btn small" type="button" data-dev-remove="${esc(h)}">Remove</button></li>`).join('')
+    : '<li class="hint" style="margin:0">No device has claimed the admin link yet. The first one to open it and press Claim becomes the owner.</li>';
+  $('#devReqs').innerHTML = adminReqs.map(q => `<li class="devrow"><span>${esc(q.name)} <span class="src">· asking for access</span></span><span style="display:flex;gap:6px"><button class="btn small" type="button" data-dev-ok="${esc(q.hash)}">Approve</button><button class="btn small" type="button" data-dev-no="${esc(q.hash)}">Deny</button></span></li>`).join('');
 }
+$('#devList').addEventListener('click', e => {
+  const b = e.target.closest('[data-dev-remove]'); if (!b) return;
+  const h = b.dataset.devRemove, d = admins[h]; if (!d) return;
+  delete admins[h];
+  if (d.owner) { const next = Object.keys(admins)[0]; if (next) admins[next].owner = true; }
+  saveAdmins(); modUI(); publishState(true); log(`Removed ${d.name}'s device from the admin link`);
+});
+$('#devReqs').addEventListener('click', e => {
+  const ok = e.target.closest('[data-dev-ok]'), no = e.target.closest('[data-dev-no]');
+  const h = ok ? ok.dataset.devOk : no ? no.dataset.devNo : null; if (!h) return;
+  const q = adminReqs.find(x => x.hash === h); adminReqs = adminReqs.filter(x => x.hash !== h);
+  if (q && ok) { admins[q.hash] = {name: q.name, pub: q.pub, owner: !Object.keys(admins).length, since: Date.now()}; log(`Approved ${q.name}'s device for the admin link`, 'ok'); }
+  saveAdmins(); modUI(); publishState(true);
+});
+$('#devReset').addEventListener('click', e => {
+  const b = e.currentTarget;
+  if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Click again to reset'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'Reset the device lock'; }, 3000); return; }
+  delete b.dataset.armed; b.textContent = 'Reset the device lock';
+  admins = {}; adminReqs = []; saveAdmins(); modUI(); publishState(true);
+  log('Reset the admin device lock. The next device to claim the admin link becomes the owner.', 'ok');
+});
 $('#setMod').addEventListener('change', e => { settings.modOn = e.target.checked; save(); if (settings.modOn) modStart(); else { modStop(); modSetConn('Not connected'); } modUI(); });
 $('#modNew').addEventListener('click', e => {
   const b = e.currentTarget;
   if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Click again to confirm'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'Make a new admin link'; }, 3000); return; }
   delete b.dataset.armed; b.textContent = 'Make a new admin link';
-  settings.modRoom = newRoom().replace(/^cq_/, 'cqm_'); modSeen = {tIso: new Date().toISOString(), ids: [], nonces: []};
+  settings.modRoom = newRoom().replace(/^cq_/, 'cqm_'); modSeen = {tIso: new Date().toISOString(), ids: [], nonces: []}; admins = {}; adminReqs = []; saveAdmins();
   save(); saveModSeen(); modStart(); modUI();
   log('Made a new admin link. The old one no longer works.', 'ok');
 });

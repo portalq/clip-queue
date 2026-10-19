@@ -41,6 +41,8 @@ Someone the streamer trusts can help manage the queue from their own device, wit
 
 While the streamer's queue page is open, changes apply within a couple of seconds. While it's closed, the admin page still shows the last queue plus any new website submissions. Approvals, rejections and removals are saved (with an **Undo** button) and applied the next time the queue page opens. The **Chat links** and **Open/Closed** switches can be flipped either way, too. Only Skip needs the queue page to be open.
 
+**Device lock:** the first device to open the admin link and press **Claim for this device** becomes its owner. After that, the queue page ignores changes from any other device, even one that has the link. Other devices can press **Ask for access**; the owner approves or denies them on the admin page, and the streamer can also manage them under **Settings → Admin link → Approved devices**, including **Reset the device lock** if the owner loses access (for example after clearing their browser data).
+
 If the link leaks, press **Make a new admin link** and the old one stops working.
 
 This needs the Firebase database, and the **Rules** in Firebase must be the latest [`firestore.rules`](firestore.rules).

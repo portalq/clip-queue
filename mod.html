@@ -70,6 +70,8 @@ a.btn{text-decoration:none;color:var(--fg)}
 .thumb.noimg .badge{display:none}
 .c-youtube{color:var(--yt)} .c-twitch{color:var(--twitch)} .c-tiktok{color:var(--tiktok)} .c-instagram{color:var(--ig)} .c-twitter{color:var(--x)} .c-streamable{color:var(--str)}
 .hint{color:var(--muted);margin:0;font-size:13px}
+.devrow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;background:var(--raised);border-radius:8px;flex-wrap:wrap}
+.devrow small{color:var(--muted)}
 .log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font:12px/1.5 var(--mono);color:var(--muted)}
 .log .ok{color:var(--ok)} .log .no{color:#f0a6a8}
 .msg{margin:0;font-size:13px}
@@ -87,6 +89,13 @@ a.btn{text-decoration:none;color:var(--fg)}
 
   <div class="bad" id="badLink" hidden>This admin link is incomplete. Ask the streamer to copy it again from Settings → Admin link.</div>
   <div class="bad" id="noSetup" hidden>The database isn't set up on this site, so the admin page can't be used.</div>
+
+  <section class="card" id="lockCard" hidden>
+    <h2 id="lockTitle">Admin link</h2>
+    <p class="hint" id="lockText" style="font-size:14px"></p>
+    <div><button class="btn primary" id="lockBtn" type="button"></button></div>
+    <p class="msg" id="lockMsg" role="status" aria-live="polite"></p>
+  </section>
 
   <div id="panel" style="display:flex;flex-direction:column;gap:18px">
     <div class="row-end">
@@ -115,6 +124,13 @@ a.btn{text-decoration:none;color:var(--fg)}
       <p class="hint" id="queueEmpty">The queue is empty.</p>
     </section>
     <p class="msg" id="actMsg" role="status" aria-live="polite"></p>
+
+    <section class="card" id="devCard" hidden>
+      <h2>Devices with access</h2>
+      <p class="hint">Only these devices can change the queue. Anyone else who opens this link sees it locked and can ask you for access.</p>
+      <ul class="list" id="devList"></ul>
+      <ul class="list" id="devReqs"></ul>
+    </section>
 
     <section class="card">
       <h2>Queue page activity</h2>
@@ -257,7 +273,8 @@ async function loadAway(){
   if (online()) { decided = new Map(); fresh = []; setPend = {}; return; }
   const iso = new Date(state.at - 2 * 60e3).toISOString();
   const acts = await since(`rooms/${room}`, 'acts', iso, 300);
-  const list = acts.map(d => { try { return JSON.parse(d.fields.body.stringValue); } catch { return null; } }).filter(Boolean);
+  const okDevs = new Set((state.admins || []).map(a => a.hash));
+  const list = acts.map(d => { try { return JSON.parse(d.fields.body.stringValue); } catch { return null; } }).filter(a => a && (!state.locked || okDevs.has(a.dev)));
   const undone = new Set(list.filter(a => a.action === 'undo').map(a => a.ref));
   const m = new Map();
   for (const a of list) if (['approve', 'reject', 'remove'].includes(a.action) && !undone.has(a.n)) m.set(a.key, {action: a.action, n: a.n});
@@ -319,10 +336,50 @@ function watchWeb(){
 }
 
 /* ---------- actions ---------- */
+/* This device's own key pair. The private half never leaves this browser; the queue page only accepts changes signed with an approved key. */
+const ECDSA = {name:'ECDSA', namedCurve:'P-256'};
+const DEVKEY = 'cqadmin:device:' + room;
+let dev = null;
+async function sha16(str){ const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str)); return Array.from(new Uint8Array(h).slice(0, 8), b => b.toString(16).padStart(2, '0')).join(''); }
+const b64e = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+async function device(){
+  if (dev) return dev;
+  try { const saved = JSON.parse(localStorage.getItem(DEVKEY) || 'null'); if (saved && saved.priv && saved.pub) { dev = saved; dev.key = await crypto.subtle.importKey('jwk', saved.priv, ECDSA, false, ['sign']); return dev; } } catch {}
+  const kp = await crypto.subtle.generateKey(ECDSA, true, ['sign', 'verify']);
+  const pub = JSON.stringify(await crypto.subtle.exportKey('jwk', kp.publicKey));
+  const priv = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  dev = {pub, priv, hash: await sha16(pub)};
+  try { localStorage.setItem(DEVKEY, JSON.stringify(dev)); } catch {}
+  dev.key = kp.privateKey;
+  return dev;
+}
 async function send(body){
+  const d = await device();
+  body.dev = d.hash;
+  const text = JSON.stringify(body);
+  const sig = b64e(await crypto.subtle.sign({name:'ECDSA', hash:'SHA-256'}, d.key, new TextEncoder().encode(text)));
   const r = await fetch(fbUrl(`rooms/${room}/acts`), {method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({fields:{kind:{stringValue:'act'}, body:{stringValue: JSON.stringify(body)}, sig:{stringValue:''}, t:{timestampValue:new Date().toISOString()}}})});
+    body: JSON.stringify({fields:{kind:{stringValue:'act'}, body:{stringValue: text}, sig:{stringValue: sig}, t:{timestampValue:new Date().toISOString()}}})});
   if (!r.ok) throw new Error('HTTP ' + r.status);
+  fetch(NTFY + room + '_act', {method:'POST', body:'1'}).catch(() => {});
+}
+/* Where this device stands: 'open' (old queue page without the lock), 'claim', 'mine', 'owner', 'locked' */
+function access(){
+  if (!state || !state.locked) return 'open';
+  const list = state.admins || [];
+  if (!list.length) return 'claim';
+  const me = dev && list.find(a => a.hash === dev.hash);
+  return me ? (me.owner ? 'owner' : 'mine') : 'locked';
+}
+let lockSent = '';
+async function lockAction(){
+  const a = access(), name = $('#myName').value.trim().slice(0, 25) || 'Admin device';
+  const d = await device();
+  try {
+    if (a === 'claim') { await send({action:'claim', pub: d.pub, name, t: Date.now(), n: nonce()}); lockSent = 'claim'; }
+    else if (a === 'locked') { await send({action:'request', pub: d.pub, name, t: Date.now(), n: nonce()}); lockSent = 'request'; }
+    render(); setTimeout(loadState, 1500); setTimeout(loadState, 4000);
+  } catch { $('#lockMsg').textContent = "Couldn't send that. Check your connection and try again."; $('#lockMsg').className = 'msg no'; }
 }
 async function act(action, key){
   const live = online();
@@ -343,7 +400,6 @@ async function act(action, key){
       if (!live && (action === 'open' || action === 'close')) setPend.open = action === 'open';
       if (!live && (action === 'chatOn' || action === 'chatOff')) setPend.chat = action === 'chatOn';
     }
-    if (live) fetch(NTFY + room + '_act', {method:'POST', body:'1'}).catch(() => {});
     actMsg('');
     if (live) { setTimeout(loadState, 1500); setTimeout(loadState, 3500); setTimeout(() => { pending.delete(id); loadState(); }, 8000); }
     else { pending.delete(id); render(); }
@@ -373,6 +429,28 @@ document.addEventListener('error', e => { const i = e.target; if (i && i.tagName
 const requestItems = () => [...((state && state.requests) || []), ...fresh];
 
 function render(){
+  const a = access(), ok = a === 'open' || a === 'mine' || a === 'owner';
+  $('#panel').hidden = !ok;
+  $('#lockCard').hidden = ok || !state;
+  if (!ok && state) {
+    const off = online() ? '' : " The streamer's queue page is closed right now, so this goes through when it next opens.";
+    if (a === 'claim') {
+      $('#lockTitle').textContent = 'Claim this admin link';
+      $('#lockText').textContent = 'Lock the admin link to this device so only you can use it. Anyone else who opens the link will need your approval.' + off;
+      $('#lockBtn').textContent = lockSent === 'claim' ? 'Claim sent…' : 'Claim for this device';
+    } else {
+      $('#lockTitle').textContent = 'This admin link is locked';
+      $('#lockText').textContent = 'Only approved devices can use it. You can ask the owner for access; they approve it from their admin page, or the streamer can from his Settings.' + off;
+      $('#lockBtn').textContent = lockSent === 'request' ? 'Request sent, waiting for approval' : 'Ask for access';
+    }
+    $('#lockBtn').disabled = !!lockSent;
+  }
+  $('#devCard').hidden = a !== 'owner';
+  if (a === 'owner') {
+    $('#devList').innerHTML = (state.admins || []).map(d => `<li class="devrow"><span>${esc(d.name)}${d.owner ? ' <small>· owner</small>' : ''}${d.hash === dev.hash ? ' <small>· this device</small>' : ''}</span>${d.owner ? '' : `<button class="btn small" data-dev="removeDevice" data-target="${esc(d.hash)}">Remove</button>`}</li>`).join('');
+    $('#devReqs').innerHTML = (state.adminReqs || []).map(q => `<li class="devrow"><span>${esc(q.name)} <small>· asking for access</small></span><span class="acts"><button class="btn small primary" data-dev="approveDevice" data-target="${esc(q.hash)}">Approve</button><button class="btn small" data-dev="denyDevice" data-target="${esc(q.hash)}">Deny</button></span></li>`).join('');
+  }
+  if (!ok) return;
   const on = online();
   $('#liveStatus').className = 'status ' + (!state ? 'wait' : on ? 'on' : 'off');
   $('#liveText').textContent = !state ? "Waiting for the streamer's queue page to share the queue"
@@ -426,6 +504,13 @@ document.addEventListener('click', e => {
   act(b.dataset.a, b.dataset.k);
 });
 $('#approveAll').addEventListener('click', () => act('approveAll'));
+$('#lockBtn').addEventListener('click', lockAction);
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-dev]'); if (!b || b.disabled) return;
+  b.disabled = true;
+  try { await send({action: b.dataset.dev, target: b.dataset.target, name: $('#myName').value.trim().slice(0, 25), t: Date.now(), n: nonce()}); setTimeout(loadState, 1500); }
+  catch { b.disabled = false; actMsg("Couldn't send that. Check your connection and try again.", 'no'); }
+});
 function flip(k){
   if (!state) return;
   const shown = k === 'open'
@@ -443,7 +528,7 @@ $('#chatTally').addEventListener('click', () => flip('chat'));
 if (!room) { $('#badLink').hidden = false; $('#panel').hidden = true; }
 else if (!FBOK) { $('#noSetup').hidden = false; $('#panel').hidden = true; }
 else {
-  render(); loadState();
+  device().then(() => { render(); loadState(); });
   setInterval(loadState, 20000);
   setInterval(render, 5000);
   try {
