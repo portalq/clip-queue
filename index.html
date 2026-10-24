@@ -318,9 +318,10 @@ const PLATFORMS = {
   streamable:{label:'Streamable',       chip:'STRM'}
 };
 
-const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'', web:false, webReview:true, webRoom:'', reviewChat:true, chatLinks:true, modOn:false, modRoom:'',
+const defaults = {channel:'', who:'all', maxPerUser:3, allowRepeats:false, autoNextYT:true, titles:true, open:true, igCrop:true, ytKey:'', ytPoll:10, ytTarget:'', web:false, webReview:false, webRoom:'', reviewChat:false, chatLinks:true, modOn:false, modRoom:'',
   platforms:Object.fromEntries(Object.keys(PLATFORMS).map(k => [k, true]))};
 const settings = Object.assign({}, defaults, store.get('settings', {}));
+if (!settings.straightToQueueV1) { settings.reviewChat = false; settings.webReview = false; settings.straightToQueueV1 = true; store.set('settings', settings); }
 settings.platforms = Object.assign({}, defaults.platforms, settings.platforms);
 let queue = store.get('queue', []);
 let history = store.get('history', []);
@@ -880,7 +881,7 @@ function webLink(){
 function webSetConn(text){ $('#webConn').textContent = text; }
 function noteCaughtUp(){
   clearTimeout(web.caughtTimer);
-  web.caughtTimer = setTimeout(() => { if (web.caughtUp) log(`${web.caughtUp} link${web.caughtUp === 1 ? ' was' : 's were'} sent while you were away. They're in Requests.`, 'ok'); web.caughtUp = 0; }, 1500);
+  web.caughtTimer = setTimeout(() => { if (web.caughtUp) log(`${web.caughtUp} link${web.caughtUp === 1 ? ' was' : 's were'} sent while you were away. ${settings.webReview ? "They're in Requests." : 'They were added to the queue.'}`, 'ok'); web.caughtUp = 0; }, 1500);
 }
 /* ---- Firestore storage (used when config.js has a Firebase project) ---- */
 const FB = (window.CQ_CONFIG && CQ_CONFIG.firebaseProjectId && CQ_CONFIG.firebaseApiKey) ? CQ_CONFIG : null;
@@ -990,13 +991,14 @@ function webReceive(m, offline = false){
   const link = parseLink(m.url.slice(0, 500));
   if (!link) { log(`${name} (web): not a supported link`, 'no'); return; }
   if (!offline && !settings.open) { log(`${name} (web): queue is closed`, 'no'); return; }
-  if (settings.webReview || offline) {
+  if (settings.webReview) {
     const why = toRequests(link, name, {uid, source:'Website'});
     if (why) { log(`${name} (web): skipped, ${why}`, 'no'); return; }
     if (offline) { web.caughtUp++; return; }
     log(`${name} (web) sent ${PLATFORMS[link.platform].label} for review`, 'ok');
   } else {
     const why = addLink(link, name, {source:'Website', uid});
+    if (!why && offline) { web.caughtUp++; return; }
     log(why ? `${name} (web): skipped, ${why}` : `${name} (web) added ${PLATFORMS[link.platform].label}`, why ? 'no' : 'ok');
   }
 }

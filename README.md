@@ -29,7 +29,7 @@ YouTube moderators and the channel owner can use the `!cq` commands. Channel mem
 
 ## Reviewing links
 
-By default, links from Twitch and YouTube chat go to the **Requests** tab first. Approve them there to add them to the queue, or reject them. Switch this off under **Settings → Who can add links → Review chat links before they join the queue** to send chat links straight to the queue.
+By default, links from chat and the website go straight into the queue. To check them first, tick **Settings → Who can add links → Review chat links before they join the queue** and/or **Settings → Website submissions → Review website links before they join the queue**; those links then wait in the **Requests** tab for approval.
 
 ## Admin link
 
